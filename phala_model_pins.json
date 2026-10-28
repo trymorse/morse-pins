@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "containers": [
+    {
+      "image": "dstacktee/vllm-proxy",
+      "digest": "sha256:8a273bbb3cc3f0c091c141680789bcb3acf0474883ce5569a6f87f9d43552dc8",
+      "source": null,
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/dstack-tee/dstack-ingress",
+      "digest": "sha256:60e682449534715a2f2e5b72326ca4229209c8e26c931c6f34d27e02200ac086",
+      "source": "https://github.com/Dstack-TEE/dstack-examples@d43a8e5c6a873e9e85ca67941cd08c988faa36a8",
+      "first_seen": "2026-10-28"
+    },
+    {
+      "image": "ghcr.io/dstack-tee/dstack-ingress",
+      "digest": "sha256:c212abb7bedec4d7b54a82bcf9972e58e39a4757cc811faeb6017eee6c0673b0",
+      "source": "https://github.com/Dstack-TEE/dstack-examples@91a5819c419886d84f95761368cd2182b9f45ba1",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/huggingface/text-embeddings-inference",
+      "digest": "sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c",
+      "source": "https://github.com/huggingface/text-embeddings-inference@78502d8e61223d2c73d4bb7aeaea46787e90d596",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/kev",
+      "digest": "sha256:459f8fd8ea83a3be042aaa45032255c9feb58542e16b366d40d71de616696d49",
+      "source": "https://github.com/Phala-Network/kev@de71a7b3e00d9714c54282be47cfdc27a5ac3d8d",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:157b70d1cb8fa9e6f5cb88e1d926fad7ddefd2166f2486e0e81647dab8dbaecd",
+      "source": null,
+      "first_seen": "2026-10-28"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:266d1ffe6f8635c20af1155f499ba0419a537a525c243da3712090be3592d2ae",
+      "source": null,
+      "first_seen": "2026-10-27"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:30945c4c6d9a85123a7ea6d5fbc4c3c316d279326d88d786953c2d0de5e2b916",
+      "source": null,
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:6c6650ca392b465a80636abe4bf849b2eefd8b40dec45ec460a2fc6d276d3b0a",
+      "source": null,
+      "first_seen": "2026-10-28"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:fa25aef18395a828d3c5fc0317d324b5a2ac9c8294e1b5247e93352a9907ff45",
+      "source": null,
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/pig-tail",
+      "digest": "sha256:2cf01245ffa466985a0e7fd9e268eee45558bf1dd46a10c9507b6a9e7553a15d",
+      "source": "https://github.com/Phala-Network/pig-tail@4c5f75bb9387db413defbd010aaaa93220dc4f93",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/pig-tail",
+      "digest": "sha256:6cd83ee0aac9474f8c36af3733f8ff7b447684dfd999d0dfd0a1001232fd0160",
+      "source": "https://github.com/Phala-Network/pig-tail@1c3146c293e10c9fe332622d64c3f5280c980867",
+      "first_seen": "2026-10-28"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:1696a849ddc2760e459ff7c06d735eedfcec3406fa7d17b9a8d974f9ebca21d0",
+      "source": "https://github.com/Phala-Network/sglang@82da9278e229402abcb50b46ee5a57e801bb651c",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:26ccb804414ee61251af7c51d02da39185b11fd625933809d345dcb082e800a3",
+      "source": "https://github.com/Phala-Network/sglang@44784573caa022c155c1b07de66fdaf8e58caefd",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:6a74c66ab1c44d32d07d8f227fc5074a43a330251ea3e2b37ebe731a6178e5ee",
+      "source": "https://github.com/Phala-Network/sglang@c2ce5382dad45fd85e39f5d4e1d93165225eb34d",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:99f87637113087bd22c3aee4ee5d68e269c5cd2060eb0bc4182a0ea749d5c5ae",
+      "source": "https://github.com/Phala-Network/sglang@bf761530e2b47bd212a94229635d570ca2e1a6b2",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:c89968920dc5facaa54ff735e2a431b3b6dac51adde8c6424badc58fe03d6c13",
+      "source": "https://github.com/Phala-Network/sglang@d03c6975c0bb94c267e946c21c4b970954b60259",
+      "first_seen": "2026-10-27"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:cf0cf7a61358162e31dd96cd5591e8e0c42d2b5fcd0dd570ed02a5212710a26e",
+      "source": "https://github.com/Phala-Network/sglang@80afb70020aad5ce1135fcbb00864c0d761c8413",
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:da7637f1d5eae77aa3527620cb74a7b9464c8f475a1db385716c6a4571f94e7f",
+      "source": "https://github.com/Phala-Network/sglang@584be3b90ee5cadad895c6c216d7d476836171c9",
+      "first_seen": "2026-10-28"
+    },
+    {
+      "image": "haproxy",
+      "digest": "sha256:52c5921e1619f39cbd5b25e1b4b5847667917f39745056cf004d9c263fbf11b9",
+      "source": null,
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "haproxy",
+      "digest": "sha256:7af8255207ee9964ccb4eec8ce4b7a40b777769665e3ae83897fb01b24d8a43a",
+      "source": null,
+      "first_seen": "2026-10-17"
+    },
+    {
+      "image": "haproxy",
+      "digest": "sha256:c0afc4864dca9c68694cd1290433f0ee79b5c55be80f6745a165ffe373b9a564",
+      "source": null,
+      "first_seen": "2026-10-17"
+    }
+  ]
+}
