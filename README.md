@@ -21,3 +21,7 @@ Each entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enc
 Images that Morse ran before it began publishing its enclave source are listed too. Their tags do not exist in morse-enclave, so they cannot be rebuilt from it.
 
 This repository does not take pull requests. To report a security problem, follow [morse-enclave's SECURITY.md](https://github.com/trymorse/morse-enclave/blob/main/SECURITY.md).
+
+## License
+
+The `*_pins.json` files are released under the MIT License. See `LICENSE`. The files in `composes` are Phala's release manifests, copied as measured. Morse did not write them, so `LICENSE` does not cover them.
