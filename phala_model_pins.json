@@ -57,6 +57,12 @@
     },
     {
       "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:f20b89105af84fac89fde647be26dc1052cd5e4b28f1c61e2b49ea1587480bb5",
+      "source": null,
+      "first_seen": "2026-10-30"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
       "digest": "sha256:fa25aef18395a828d3c5fc0317d324b5a2ac9c8294e1b5247e93352a9907ff45",
       "source": null,
       "first_seen": "2026-10-17"
@@ -114,6 +120,12 @@
       "digest": "sha256:da7637f1d5eae77aa3527620cb74a7b9464c8f475a1db385716c6a4571f94e7f",
       "source": "https://github.com/Phala-Network/sglang@584be3b90ee5cadad895c6c216d7d476836171c9",
       "first_seen": "2026-10-28"
+    },
+    {
+      "image": "grafana/alloy",
+      "digest": "sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18",
+      "source": "https://github.com/grafana/alloy",
+      "first_seen": "2026-10-30"
     },
     {
       "image": "haproxy",
