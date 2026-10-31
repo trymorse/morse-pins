@@ -196,5 +196,14 @@
     "pcr2": "f78a6ca75f8b37ee8f349b02b989bd44c7c68bca2bfb1d672c7d3ada31928cc0e92571de94c83f6b938c60c01268224e",
     "built_at": "2026-10-31T06:27:23Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.10.9",
+    "environment": "prod",
+    "pcr0": "745aa4d13be9d28189d1f3f045fba9eb2b43b2cb87e133dad430fa8921976cdd3b63c8eac8e40d8bb7ad2354950bdf55",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "fba79bb44b68c40078d146833ffaa661f81e55ff1a2c0cf7e786b93a98a4c6ea903a589676200ce2803dd1557a31ee86",
+    "built_at": "2026-10-31T22:24:28Z",
+    "revoked": false
   }
 ]
