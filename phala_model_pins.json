@@ -57,6 +57,18 @@
     },
     {
       "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:8aa73df8b87bc93e321f907c4db711a1d9a0f17ea29b70a63bd039ab076adc1d",
+      "source": null,
+      "first_seen": "2026-11-01"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
+      "digest": "sha256:e72d0402412fb8fb9192e675ff0f54bc3741d6f9b62d4a96632cc12f68ef260d",
+      "source": null,
+      "first_seen": "2026-11-01"
+    },
+    {
+      "image": "ghcr.io/phala-network/phala-inference-guard",
       "digest": "sha256:f20b89105af84fac89fde647be26dc1052cd5e4b28f1c61e2b49ea1587480bb5",
       "source": null,
       "first_seen": "2026-10-30"
