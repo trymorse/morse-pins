@@ -26,6 +26,12 @@
       "first_seen": "2026-10-17"
     },
     {
+      "image": "ghcr.io/phala-network/cvm-log-collector",
+      "digest": "sha256:6f29b15de629b1517b72f843aed20029d49d5b2d4bf43ecf2461f24341ddef82",
+      "source": "https://github.com/Phala-Network/cvm-log-collector@13cd1064897ffb9160297f587d3dd97b45f74799",
+      "first_seen": "2026-11-02"
+    },
+    {
       "image": "ghcr.io/phala-network/kev",
       "digest": "sha256:459f8fd8ea83a3be042aaa45032255c9feb58542e16b366d40d71de616696d49",
       "source": "https://github.com/Phala-Network/kev@de71a7b3e00d9714c54282be47cfdc27a5ac3d8d",
