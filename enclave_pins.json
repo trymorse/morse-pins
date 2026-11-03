@@ -232,5 +232,14 @@
     "pcr2": "d49a5fd217a339bd32f4d5052f1094e62a33c6d7d73e91c60178f8220dfd90e2cc9f7f1ecc5080519c435305f92f3332",
     "built_at": "2026-11-03T00:36:25Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.2",
+    "environment": "prod",
+    "pcr0": "07d5a4325176019df872dd5582afeed3eb175aeb63abbf3c12cfbf1ca000b82fae2dc6d188ef2ff1bd10bf6b153fc195",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "e8080588323a27b0ce39932fb0ecd3b6d1684838448ffd3ae9b433413184e094cdf1ed3c9f4fd1eb82aa8e1f2ef97d05",
+    "built_at": "2026-11-03T09:12:15Z",
+    "revoked": false
   }
 ]
