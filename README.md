@@ -8,7 +8,7 @@ A bot makes each commit when Morse's private pins change. Its message says what 
 
 | File | What it pins |
 |---|---|
-| `enclave_pins.json` | Morse's own AWS Nitro enclave. One entry per production image, with its PCR0, PCR1, and PCR2. Morse's web app refuses an entry with `revoked: true`. |
+| `enclave_pins.json` | Morse's own AWS Nitro enclave. One entry per image, with its `environment`, PCR0, PCR1, and PCR2. `prod` images serve Morse's apps, and `dev` images serve Morse's development environment. Morse's web app refuses an entry with `revoked: true`. |
 | `phala_pins.json` | The Phala gateway: its identity, the releases and KMS builds it may run, and the dstack OS images it may run on. |
 | `near_pins.json` | The NEAR AI Cloud gateway and model workloads: app ids, KMS roots, TD attributes, the Intel TCB statuses accepted, and the composes, OS images, and instances seen. |
 | `phala_model_pins.json` | The container images Phala's model servers ran, one entry per image digest. It records what ran. It does not approve anything. |
@@ -16,7 +16,7 @@ A bot makes each commit when Morse's private pins change. Its message says what 
 
 ## Check Morse's enclave
 
-Each entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enclave](https://github.com/trymorse/morse-enclave). Check out that tag, rebuild the image as its README describes, and compare your PCR0, PCR1, and PCR2 with the entry's.
+Each `prod` entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enclave](https://github.com/trymorse/morse-enclave). Check out that tag, rebuild the image as its README describes, and compare your PCR0, PCR1, and PCR2 with the entry's. A `dev` entry's `tag` names the unreleased commit it was built from. Morse does not publish that source, so nobody can rebuild a `dev` image.
 
 The file also lists images that Morse ran before it began publishing its enclave source. Their tags do not exist in morse-enclave, so nobody can rebuild them from it.
 
