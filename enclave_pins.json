@@ -290,10 +290,10 @@
   {
     "tag": "v2026.11.4",
     "environment": "prod",
-    "pcr0": "87643b25bb2486d99df23d941de3ecd923d95c89be246e29bc591178b2e24ba7d08587299ecdace3a36c9d7d2b4e70bf",
+    "pcr0": "0cc0f8d3770edb9f5e36c2903d4a8ff2b618b6f8edc0cecf968ba3742d5fe5bcbc9fd9757747b578c6828f2c83258f04",
     "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
-    "pcr2": "1aa4e48feb8ae1d6b028bd2c5492fa3fc75d29f031c244dbe1c580ae5a51d44f8752d7f8991cf76d903e0ee5a1ef6f69",
-    "built_at": "2026-11-04T09:06:01Z",
+    "pcr2": "e3f781d647fe87c221518df3dc3190d16b26b05b8e3965eafa03d921cb0b6e8a2e6c8c92bb6594435c48c229ea86a27f",
+    "built_at": "2026-11-04T09:42:47Z",
     "revoked": false
   }
 ]
