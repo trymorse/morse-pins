@@ -405,12 +405,12 @@
     "revoked": false
   },
   {
-    "tag": "v2026.11.5-pins-a52c9e7",
+    "tag": "v2026.11.5-pins-6c62f0b",
     "environment": "prod",
-    "pcr0": "7c667bba59a58e30393dc690f07bdb118fb20c197ea15e671cf030d0aee7abe1e0ba05a81667abb1b38f1ff937dd12c5",
+    "pcr0": "666e42a548a38925ea186f08038a0d6790919bb7372f0422719f123ea4d6acb4367311f71f54da6fe785800e22e5bef5",
     "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
-    "pcr2": "c321e42001bacaffa62e18adb2711c14404581f161d2964eaef2b9af6add4a05d1e992b6f31702453c3a700e3d350811",
-    "built_at": "2026-11-06T05:51:57Z",
+    "pcr2": "50ffabad8e35acdb9d0bd74571ae0d0cb43355e72ea045723c94360b0477d783365c552ade8e927f7152eb24d2dfb104",
+    "built_at": "2026-11-06T06:53:31Z",
     "revoked": false
   },
   {
