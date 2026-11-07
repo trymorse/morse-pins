@@ -511,5 +511,14 @@
     "pcr2": "6c906d4cac371a63b5968763602c5cf0fad594065a038ea3795d5fe1b1ed67be349b2248dd429b6b366863f0b2bc12d5",
     "built_at": "2026-11-07T01:08:00Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.6-pins-37e46d6",
+    "environment": "prod",
+    "pcr0": "c40608729d2a0aa915048f82e78285b82f89bf31f336521484836755edadf5173b3458d3f9649d77de2c1ae8dd37c3a2",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "907267ec189fb62454010ac6c2c1e58ec82f5fdd2a45fa0df889350272e5f97d8937db718bd42528948161df30770fb8",
+    "built_at": "2026-11-07T01:10:58Z",
+    "revoked": false
   }
 ]
