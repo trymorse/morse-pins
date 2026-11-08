@@ -605,10 +605,10 @@
   {
     "tag": "v2026.11.11",
     "environment": "prod",
-    "pcr0": "59bc920186b0ffd460f7ec50ab588d4f878e69458beea79b663ba8442bc564a4da8ed354f333d2b807ca25dffb29fc65",
+    "pcr0": "9b35f8244cd7c82a30250bd1980c3b7652635fcbb7804db4a00cc170e4653dc72ceb5edd1de02b0cdd0ec63c9d60f0aa",
     "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
-    "pcr2": "68218f9a3a2ff686570e443d47ef9ab21fca8e84e8a772ab40aaec4a6405feb2fd0197f2567c03c73c5bedb365b0d6f4",
-    "built_at": "2026-11-08T21:43:14Z",
+    "pcr2": "3f350f571a6251f261bae17ea912a4720be7898eb6e7227a9f07fbf787898f409cdaff283fb2fceebac48c383427e66b",
+    "built_at": "2026-11-08T22:06:25Z",
     "revoked": false
   }
 ]
