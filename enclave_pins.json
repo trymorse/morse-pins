@@ -547,5 +547,14 @@
     "pcr2": "094259d2b558c89e78a141de8016684ecfc20840ac48a6b2b8c141f2f34f9e71065a4fe0d6283460b3b29f056f540825",
     "built_at": "2026-11-08T00:41:10Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.8",
+    "environment": "prod",
+    "pcr0": "987ddc6ed796eed0e8b1b932276b8e2597a9e0ccf0ded68db0dac386612e11d992fdf71881be5196c2e78ee489fd873f",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "0e845374404ca9e0b3e8d72e0b058a1392d4e6672de96be925bcaa69aa8371270cb39534edd491514ade362cf14b405d",
+    "built_at": "2026-11-08T00:54:16Z",
+    "revoked": false
   }
 ]
