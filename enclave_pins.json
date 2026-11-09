@@ -621,21 +621,21 @@
     "revoked": false
   },
   {
-    "tag": "v2026.11.13",
-    "environment": "prod",
-    "pcr0": "c3a495a26734acb748e44605bda67e94e4bfbeb649ce12d5dcb766f5ac51fedb5e6ec9997c53f536dc8157bacb8257c3",
-    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
-    "pcr2": "191edca8572797ce972385245fa91b6d2546f3d574d7e26db4e97b6226a61ce933cbf25681768a24c2947ee52d8fb0a4",
-    "built_at": "2026-11-09T08:30:34Z",
-    "revoked": false
-  },
-  {
     "tag": "v2026.11.12-2-g970bf09d",
     "environment": "dev",
     "pcr0": "11704d21fb3b112001d0bec803d63a25871bb610693504d42a7ad2a3e90a35fbb6ec277a455a5ae70a1ffd93c8a77b8b",
     "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
     "pcr2": "3bea651b36ef56d9a5c78533d038d3b19269db1a432833d9e6d6ed68fdca07dd999aaf70cc47ee0ee9a05303e850f1ab",
     "built_at": "2026-11-09T08:34:44Z",
+    "revoked": false
+  },
+  {
+    "tag": "v2026.11.13",
+    "environment": "prod",
+    "pcr0": "cdce537df39e8e50f2c875200752d76a86d87153ceb8ef1b0a126553d3e4f69473fd39d9faa8705d78f347316cd24914",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "c8a53c3f5e9acaadf3be0341d8a7778a3e98ab4b668e83944347accb32b8386b5fadd7189d013a8e99d18d8fab543be5",
+    "built_at": "2026-11-09T08:53:54Z",
     "revoked": false
   }
 ]
