@@ -2,7 +2,9 @@
 
 These are the enclave measurements Morse's apps accept. Before the Morse app sends a sealed request, it checks the enclave's attestation against these files and refuses an enclave they do not list. This repository is a copy that Morse publishes so that anyone can see what the apps accept and when that changed.
 
-A bot makes each commit when Morse's private pins change. Its message says what was pinned or revoked.
+Start here: `npx @askmorse/verify@<version>` checks the enclaves serving Morse's API against these pins, with `<version>` a release of [morse-verifier](https://github.com/trymorse/morse-verifier). Its README says what it checks and how.
+
+A bot makes each commit when Morse's private pins change. Its message says what was pinned or revoked, naming each image by its environment, release, and PCR0.
 
 ## Files
 
@@ -49,7 +51,7 @@ Each `prod` entry in `enclave_pins.json` names its source by `tag`, a tag of [mo
 
 The file also lists images that Morse ran before it began publishing its enclave source. Their tags do not exist in morse-enclave, so nobody can rebuild them from it.
 
-This repository does not take pull requests. To report a security problem, follow [morse-enclave's SECURITY.md](https://github.com/trymorse/morse-enclave/blob/main/SECURITY.md).
+This repository does not take pull requests. To report a security problem, follow `SECURITY.md`.
 
 ## License
 
