@@ -49,9 +49,23 @@ The identity is the only one that signs, and the `--certificate-github-workflow-
 
 Each `prod` entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enclave](https://github.com/trymorse/morse-enclave). Check out that tag, rebuild the image as its README describes, and compare your PCR0, PCR1, and PCR2 with the entry's. A `dev` entry's `tag` names the unreleased commit it was built from. Morse does not publish that source, so nobody can rebuild a `dev` image.
 
-The file also lists images that Morse ran before it began publishing its enclave source. Their tags do not exist in morse-enclave, so nobody can rebuild them from it.
+Morse pins a release's `prod` image before it publishes the release's source, so the newest `prod` entry can name a tag that morse-enclave does not have yet. The tag appears when that release publishes. The commit a tag names in morse-enclave lists the image's PCR0, PCR1, and PCR2 in its message.
 
 This repository does not take pull requests. To report a security problem, follow `SECURITY.md`.
+
+### Images with no source
+
+Some `prod` entries have no source in morse-enclave, so nobody can rebuild them. Morse revoked each of them, so each is marked `revoked: true`:
+
+| Tags | Why there is no source |
+|---|---|
+| `v0.6.26` to `v0.6.34-pins-98a1f4d`, 10 images | Morse ran them before it began publishing its enclave source. Revoked after a check found no live enclave runs them. Both live enclaves ran `v2026.11.12` |
+| `v2026.10.0`, `v2026.10.0-pins-5e31f2f`, `v2026.10.0-pins-fe4f2f6`, `v2026.10.0-pins-60db229` | morse-enclave's published history starts at `v2026.10.1`. Revoked on 2026-10-29 |
+| `v2026.11.6-pins-4e80ccd` | A build of `v2026.11.6` that morse-enclave never published. It published other builds of `v2026.11.6`. Revoked after a check found no live enclave runs it. Both live enclaves ran `v2026.11.12` |
+
+### Replaced images
+
+A commit here titled `Replace prod image <tag>` means Morse pinned a new image under a tag the file already listed, and removed the image it listed before. Morse pins the next release's image while the release is still a draft. When the draft changes before it ships, Morse builds it again and the new image replaces the old one under the same tag. The replaced image is gone from the file, so Morse's apps refuse it, and the commit's diff shows its PCRs. Only the image the file lists when the release ships has its source published under that tag.
 
 ## License
 
