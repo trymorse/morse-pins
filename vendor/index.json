@@ -1,5 +1,11 @@
 [
   {
+    "sequence": 257,
+    "time": "2026-11-10T12:00:09Z",
+    "statement": "vendor/257-20261110T120009Z.statement.json",
+    "bundle": "vendor/257-20261110T120009Z.sigstore.json"
+  },
+  {
     "sequence": 255,
     "time": "2026-11-10T11:37:23Z",
     "statement": "vendor/255-20261110T113723Z.statement.json",
