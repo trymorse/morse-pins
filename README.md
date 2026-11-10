@@ -1,8 +1,10 @@
 # Morse pins
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![CodeQL](https://github.com/trymorse/morse-pins/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/trymorse/morse-pins/actions/workflows/github-code-scanning/codeql)
+
 These are the enclave measurements Morse's apps accept. Before the Morse app sends a sealed request, it checks the enclave's attestation against these files and refuses an enclave they do not list. This repository is a copy that Morse publishes so that anyone can see what the apps accept and when that changed.
 
-Start here: `npx @askmorse/verify@<version>` checks the enclaves serving Morse's API against these pins, with `<version>` a release of [morse-verifier](https://github.com/trymorse/morse-verifier). Its README says what it checks and how.
+To check the enclaves serving Morse's API against these pins, run `npx @askmorse/verify@<version>`, where `<version>` is a release of [morse-verifier](https://github.com/trymorse/morse-verifier). Its README says what it checks and how.
 
 A bot makes each commit when Morse's private pins change. Its message says what was pinned or revoked, naming each image by its environment, release, and PCR0.
 
@@ -28,7 +30,7 @@ Each release of this repository, tagged `signed-<sequence>-<time>`, carries stat
 | `<name>.sigstore.json` | The Sigstore bundle that signs `<name>.statement.json` |
 | `phala_pins.json`, `near_pins.json`, `tinfoil_pins.json`, `phala_model_pins.json` | The files `vendor.statement.json` hashes, byte for byte as the release's `main` commit holds them |
 
-Every statement names `pins_commit`, the commit of the private pins repository it was written from, `sequence`, the number of commits on that repository's `main` up to it, which only grows, and `time`, when it was written. To check the vendor statement:
+Every statement names three values. `pins_commit` is the commit of the private pins repository that Morse wrote it from. `sequence` is the number of commits on that repository's `main` up to that commit, so it only grows. `time` is when Morse wrote it. To check the vendor statement:
 
 ```bash
 gh release download --repo trymorse/morse-pins --pattern 'vendor.*' --pattern '*_pins.json'
@@ -43,19 +45,30 @@ jq -r '.files | to_entries[] | "\(.value) \(.key | sub("^v4/"; ""))"' vendor.sta
   done
 ```
 
-The identity is the only one that signs, and the `--certificate-github-workflow-sha` line checks that the statement names the commit it was signed at. The apps also refuse a statement whose `sequence` is below the one they last accepted, and one whose Rekor entry is older than they allow.
+The apps accept only this identity on a release, `https://github.com/Watermark-Labs/pins/.github/workflows/sign.yml@refs/heads/main`. It names a workflow in Morse's private pins repository. Match it as a string, because the page it names does not open for the public. The `--certificate-github-workflow-sha` line checks that the statement names the commit it was signed at. The apps also refuse a statement whose `sequence` is below the one they last accepted, and one whose Rekor entry is older than they allow.
+
+### The second signer
+
+A second signer runs in this repository, with the identity `https://github.com/trymorse/morse-pins/.github/workflows/sign.yml@refs/heads/main`. Its workflow is public, so anyone can read what it signs. It logs to Rekor v2 and makes no release. It commits to the `statements/images` branch instead, with one directory per statement:
+
+| Directory | What it holds |
+|---|---|
+| `dev/`, `prod/` | A `morse-enclave-pins-v1` statement per environment, listing that environment's images of `enclave_pins.json` |
+| `vendor/` | A `morse-vendor-pins-v1` statement hashing the vendor pins files, as `vendor.statement.json` does |
+
+Each directory holds `<sequence>-<time>.statement.json`, its `<sequence>-<time>.sigstore.json` bundle, and `index.json`, which lists the statements newest first. Here `pins_commit` and `sequence` refer to this repository's `main`, not the private one. Morse's enclave trusts only this second signer: it hands its task keys only to an image that such a statement lists, and takes newer vendor pins only from such a statement. Morse's apps instead take newer vendor pins from a release's vendor statement, signed by the release identity above.
 
 ## Check Morse's enclave
 
-Each `prod` entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enclave](https://github.com/trymorse/morse-enclave). Check out that tag, rebuild the image as its README describes, and compare your PCR0, PCR1, and PCR2 with the entry's. A `dev` entry's `tag` names the unreleased commit it was built from. Morse does not publish that source, so nobody can rebuild a `dev` image.
+Each `prod` entry in `enclave_pins.json` names its source by `tag`, a tag of [morse-enclave](https://github.com/trymorse/morse-enclave). Check out that tag, rebuild the image as its README describes, and compare your PCR0, PCR1, and PCR2 with the entry's. A `dev` entry's `tag` names the unreleased commit Morse built it from. Morse does not publish that source, so nobody can rebuild a `dev` image.
 
 Morse pins a release's `prod` image before it publishes the release's source, so the newest `prod` entry can name a tag that morse-enclave does not have yet. The tag appears when that release publishes. The commit a tag names in morse-enclave lists the image's PCR0, PCR1, and PCR2 in its message.
 
-This repository does not take pull requests. To report a security problem, follow `SECURITY.md`.
+Pull requests here are internal-only, and Morse does not merge one from outside. Issues are welcome. See `CONTRIBUTING.md`. To report a security problem, follow `SECURITY.md`.
 
 ### Images with no source
 
-Some `prod` entries have no source in morse-enclave, so nobody can rebuild them. Morse revoked each of them, so each is marked `revoked: true`:
+Some `prod` entries have no source in morse-enclave, so nobody can rebuild them. Morse revoked each of them, so each has `revoked: true`:
 
 | Tags | Why there is no source |
 |---|---|
