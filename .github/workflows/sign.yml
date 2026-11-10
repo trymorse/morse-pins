@@ -1,0 +1,636 @@
+name: sign
+
+# Signs one statement per environment listing its enclave images, and one statement hashing the
+# vendor pins, with Sigstore keyless signing logged to Rekor v2, and commits each statement and its
+# bundle to the statements/images branch. An enclave hands its task keys only to an image that such
+# a statement lists, and takes vendor pins only from such a statement. It accepts only a statement
+# that this file signed on main of this repository in the first attempt of a push or schedule run,
+# so a workflow_dispatch trigger or a re-run would sign nothing it accepts. Everything signed is
+# public at the commit the certificate names, and the signer needs no secret. A run whose
+# statements the newest on the branch already signs, less than a day before, commits nothing, so
+# the hourly runs keep the newest statement well inside the 7 days an enclave allows.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'enclave_pins.json'
+      - 'near_pins.json'
+      - 'phala_model_pins.json'
+      - 'phala_pins.json'
+      - 'tinfoil_pins.json'
+      - '.github/workflows/sign.yml'
+      - '.github/workflows/sigstore-signing-config.json'
+  schedule:
+    - cron: '43 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      COSIGN_VERSION: v3.1.4
+      COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+      IDENTITY: https://github.com/trymorse/morse-pins/.github/workflows/sign.yml@refs/heads/main
+      ISSUER: https://token.actions.githubusercontent.com
+      VENDOR_FILES: near_pins.json phala_model_pins.json phala_pins.json tinfoil_pins.json
+      # Sigstore's signing_config_rekor_v2.v0.2.json with its Rekor v1 log removed, so every entry
+      # goes to the Rekor v2 shard. It sits under .github/workflows/, which only a push with the
+      # workflows permission can change, as for this file.
+      SIGNING_CONFIG: .github/workflows/sigstore-signing-config.json
+      STATEMENTS_BRANCH: statements/images
+      # The witness verifier the enclave runs, internal/sigstore/rekorv2, at the commit of the
+      # v2026.11.12-pins-37a2b33 tag of the public enclave source.
+      ENCLAVE_REPO: https://github.com/trymorse/morse-enclave.git
+      ENCLAVE_COMMIT: 364a0a8c72c7a226682822ae4621ab2a8dd1c1ea
+      # The witnesses of internal/door/trust.go, one "<verifier key> <operator>" a line. A checkpoint
+      # needs 3 of them, as witnessK there.
+      WITNESSES: |
+        krabbel.ct.ipng.ch+4b10dbd8+BO4sLOtnhktlqMCejDx9C5LDd+/xZxbmBb6BP9ZD2Def IPng Networks
+        staging.witness.transparency.goog/ring-any-bells+2e1a8dc9+BG5JTpLc3FJtwzgh1Uv+Qelz9qeOH2bfWjS1s0s+y4rL TrustFabric
+        witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv Mullvad VPN
+        witness.navigli.sunlight.geomys.org+a3e00fe2+BNy/co4C1Hn1p+INwJrfUlgz7W55dSZReusH/GhUhJ/G Geomys
+    steps:
+      - id: attempt
+        run: |
+          [ "$GITHUB_RUN_ATTEMPT" = 1 ] || { echo "::error::this is attempt $GITHUB_RUN_ATTEMPT of run $GITHUB_RUN_ID, and the enclave accepts only a first attempt, so it signs nothing. Its statements would rank first on the statements branch within their sequence, and every door would be offered one it refuses." >&2; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: |
+          curl -fsSLo "$RUNNER_TEMP/cosign" "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  $RUNNER_TEMP/cosign" | sha256sum -c
+          chmod +x "$RUNNER_TEMP/cosign"
+      - id: head
+        run: |
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "sequence=$(git rev-list --count HEAD)"
+            echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >>"$GITHUB_OUTPUT"
+      # Writes each environment's statement: every image enclave_pins.json lists for it, sorted by
+      # pcr0, as RFC 8785 (JCS) bytes with no trailing newline. Then the vendor statement: the sha256
+      # of the JCS bytes of each vendor pins file, the hash morse-core's use-pins.sh records in
+      # pins_source.json. The vendor statement names each file by its path in the private pins
+      # repository, v4/<name>, the key every reader of the statement (pinsig.VendorFiles, morse-core's
+      # VENDOR_FILES) expects, and this repository holds that file at its root.
+      #
+      # Each file signed must be the regular file at the signed commit, so anyone can read what was
+      # signed there. And a revocation cannot be undone: the step refuses when the file lists,
+      # unrevoked, an image that an earlier version on the first-parent history of the signed commit
+      # revoked, as check-door.py refuses the same history.
+      #
+      # jq -cS output is JCS for this shape, and the checks below hold the shape to it. JCS sorts keys
+      # by UTF-16 code unit and jq by code point, which agree on ASCII keys. Every string is ASCII with
+      # no character JSON escapes, so both write it as is. The only numbers are integers below 2^53, which
+      # both write in plain decimal. A vendor file's raw bytes are held to the same subset by a strict
+      # parser before jq hashes it: jq writes a float, a non-ASCII key or U+007F differently from JCS,
+      # keeps the spelling 1.0, 1e2 or -0, and reads non-JSON such as 010, +1, 1., NaN, a byte order
+      # mark or invalid UTF-8, where JCS parsers refuse the file. The app writes a lone surrogate
+      # differently from jq and the backend, and jq -j prints a top-level string raw, so both are
+      # refused, as is nesting deeper than the app's limit of 128. A key listed twice is refused so that
+      # no reader has to agree on which value wins.
+      - id: statements
+        env:
+          SEQUENCE: ${{ steps.head.outputs.sequence }}
+          COMMIT: ${{ steps.head.outputs.commit }}
+          TIME: ${{ steps.head.outputs.time }}
+        run: |
+          set -euo pipefail
+          [[ $SEQUENCE =~ ^[1-9][0-9]{0,8}$ ]] || { echo "bad sequence: $SEQUENCE" >&2; exit 1; }
+          [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "bad commit: $COMMIT" >&2; exit 1; }
+          [[ $TIME =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "bad time: $TIME" >&2; exit 1; }
+          read -ra files <<<"$VENDOR_FILES"
+          for file in enclave_pins.json "${files[@]}"; do
+            [ -f "$file" ] && [ ! -L "$file" ] || { echo "$file is not a regular file" >&2; exit 1; }
+            [ "$(git ls-tree --format='%(objectmode) %(objectname)' "$COMMIT" -- "$file")" = "100644 $(git hash-object -- "$file")" ] ||
+              { echo "$file is not the regular file at $COMMIT" >&2; exit 1; }
+          done
+          git log --first-parent --reverse --format=%H "$COMMIT" -- enclave_pins.json | while read -r sha; do
+            printf '{"commit":"%s","pins":' "$sha"
+            git show "$sha:enclave_pins.json"
+            printf '}\n'
+          done | jq -n '
+            def image: "\(.environment) \(.pcr0) \(.pcr1) \(.pcr2)";
+            reduce inputs as $version ({revoked: {}};
+              if .refused then .
+              elif ($version.pins | type) != "array" then .refused = "enclave_pins.json at \($version.commit) is not a list"
+              else .revoked as $revoked
+                | ([$version.pins[] | select(.revoked == false and $revoked[image])] | first) as $again
+                | if $again then .refused = "enclave_pins.json at \($version.commit) lists the \($again.environment) image with pcr0 \($again.pcr0) unrevoked, and an earlier version revoked it"
+                  else .revoked += ([$version.pins[] | select(.revoked == true) | {key: image, value: true}] | from_entries) end
+              end)
+            | if .refused then error(.refused) else empty end'
+          mkdir "$RUNNER_TEMP/signed"
+          for environment in $(jq -r 'map(.environment) | unique[]' enclave_pins.json); do
+            [[ $environment =~ ^(dev|prod)$ ]] || { echo "unknown environment: $environment" >&2; exit 1; }
+            jq -jcS --arg environment "$environment" --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
+              [.[] | select(.environment == $environment) | {pcr0, pcr1, pcr2, revoked}] | sort_by(.pcr0)
+              | if length == 0 then error("no \($environment) images")
+                elif any(.[]; [.pcr0, .pcr1, .pcr2] | any(type != "string" or ((length == 96 and test("^[0-9a-f]{96}$")) | not)))
+                then error("a PCR is not 96 lowercase hex digits")
+                elif any(.[]; .revoked | type != "boolean") then error("revoked is not a boolean")
+                elif (map(.pcr0) | unique | length) != length then error("a pcr0 is listed twice")
+                else . end
+              | {type: "morse-enclave-pins-v1", environment: $environment, sequence: $sequence,
+                 pins_commit: $commit, time: $time, images: .}' enclave_pins.json >"$RUNNER_TEMP/signed/$environment.statement.json"
+          done
+          : >"$RUNNER_TEMP/hashes"
+          for file in "${files[@]}"; do
+            python3 -I -c '
+          import json, re, sys
+          path = sys.argv[1]
+          def refuse(why):
+              sys.exit(f"{path} {why}")
+          def number(token):
+              refuse(f"holds the number {token}, which is not a plain integer below 2^53")
+          def integer(token):
+              if not re.fullmatch("0|-?[1-9][0-9]{0,15}", token) or abs(int(token)) >= 2**53:
+                  number(token)
+              return int(token)
+          def members(pairs):
+              keys = [key for key, _ in pairs]
+              for key in keys:
+                  if keys.count(key) > 1:
+                      refuse(f"lists the key {key!r} twice")
+                  if not re.fullmatch("[\x20-\x7e]*", key):
+                      refuse(f"holds the key {key!r}, which is not printable ASCII")
+              return dict(pairs)
+          def check(value, depth):
+              if isinstance(value, (dict, list)):
+                  if depth > 128:
+                      refuse("nests deeper than 128")
+                  for child in value.values() if isinstance(value, dict) else value:
+                      check(child, depth + 1)
+              elif isinstance(value, str):
+                  if re.search("[\x00-\x1f\x7f]", value):
+                      refuse("holds a string with a control character")
+                  if re.search("[\ud800-\udfff]", value):
+                      refuse("holds a string with a lone surrogate")
+          try:
+              text = open(path, "rb").read().decode("utf-8")
+          except UnicodeDecodeError as e:
+              refuse(f"is not UTF-8: {e}")
+          try:
+              document = json.loads(text, parse_int=integer, parse_float=number, parse_constant=number, object_pairs_hook=members)
+          except json.JSONDecodeError as e:
+              refuse(f"is not one JSON document: {e}")
+          except RecursionError:
+              refuse("nests deeper than 128")
+          if not isinstance(document, dict):
+              refuse("is not a JSON object")
+          check(document, 1)
+          ' "$file"
+            jq -jcS . "$file" >"$RUNNER_TEMP/jcs"
+            hash=$(sha256sum "$RUNNER_TEMP/jcs" | cut -c1-64)
+            printf 'v4/%s\t%s\n' "$file" "$hash" >>"$RUNNER_TEMP/hashes"
+          done
+          jq -jcSRn --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
+            [inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries
+            | {type: "morse-vendor-pins-v1", sequence: $sequence, pins_commit: $commit, time: $time, files: .}' "$RUNNER_TEMP/hashes" >"$RUNNER_TEMP/signed/vendor.statement.json"
+      # Skips signing when, for every statement, the newest the branch's index.json names lists the
+      # same images or vendor hashes, was signed by this file at the commit it names in a first
+      # attempt, and has a certificate issued less than FRESH seconds ago. Rekor v2 entries carry no
+      # integrated time, so the age is the certificate's NotBefore, the time pinsig.Admit measures
+      # PinsMaxAge from. Any failure to read or check the newest signs again.
+      - id: newest
+        env:
+          FRESH: 86400
+        run: |
+          set -uo pipefail
+          current() {
+            local ref ours name entry statement bundle commit der run start age
+            ref=refs/remotes/origin/$STATEMENTS_BRANCH
+            git ls-remote --exit-code origin "refs/heads/$STATEMENTS_BRANCH" >/dev/null || return 1
+            git fetch -q --no-tags origin "+refs/heads/$STATEMENTS_BRANCH:$ref" || return 1
+            for ours in "$RUNNER_TEMP"/signed/*.statement.json; do
+              name=$(basename "$ours" .statement.json)
+              entry=$(git show "$ref:$name/index.json" | jq -ce '.[0] | select(type == "object")') || return 1
+              statement=$(jq -r .statement <<<"$entry") && bundle=$(jq -r .bundle <<<"$entry") || return 1
+              [[ $statement =~ ^$name/[1-9][0-9]{0,8}-[0-9]{8}T[0-9]{6}Z\.statement\.json$ ]] && [ "$bundle" = "${statement%.statement.json}.sigstore.json" ] || return 1
+              git show "$ref:$statement" >"$RUNNER_TEMP/newest.statement.json" || return 1
+              git show "$ref:$bundle" >"$RUNNER_TEMP/newest.sigstore.json" || return 1
+              jq -e --slurpfile ours "$ours" 'del(.time, .sequence, .pins_commit) == ($ours[0] | del(.time, .sequence, .pins_commit))' "$RUNNER_TEMP/newest.statement.json" >/dev/null || return 1
+              commit=$(jq -r .pins_commit "$RUNNER_TEMP/newest.statement.json") && [[ $commit =~ ^[0-9a-f]{40}$ ]] || return 1
+              "$RUNNER_TEMP/cosign" verify-blob --bundle "$RUNNER_TEMP/newest.sigstore.json" --use-signed-timestamps --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+                --certificate-github-workflow-sha "$commit" "$RUNNER_TEMP/newest.statement.json" >/dev/null 2>&1 || return 1
+              der=$(jq -er '.verificationMaterial | if (.tlogEntries | length) == 1 then .certificate.rawBytes else error("not one log entry") end' "$RUNNER_TEMP/newest.sigstore.json") || return 1
+              run=$(base64 -d <<<"$der" | openssl x509 -inform DER -noout -text | grep -A1 -F '1.3.6.1.4.1.57264.1.21:' | tail -n 1) && [[ $run =~ /actions/runs/[0-9]+/attempts/1$ ]] || return 1
+              start=$(base64 -d <<<"$der" | openssl x509 -inform DER -noout -startdate) && start=$(date -u -d "${start#notBefore=}" +%s) || return 1
+              age=$(($(date -u +%s) - start))
+              [ "$age" -ge 0 ] && [ "$age" -lt "$FRESH" ] || return 1
+            done
+          }
+          if current; then
+            echo "the newest statements on $STATEMENTS_BRANCH already sign these, less than $FRESH seconds ago, so this run commits nothing"
+            echo "current=true" >>"$GITHUB_OUTPUT"
+          fi
+      - id: enclave
+        if: steps.newest.outputs.current != 'true'
+        run: |
+          set -euo pipefail
+          [[ $ENCLAVE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ENCLAVE_COMMIT is not a commit: $ENCLAVE_COMMIT" >&2; exit 1; }
+          dir=$RUNNER_TEMP/enclave
+          git -c init.defaultBranch=main init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 --no-tags "$ENCLAVE_REPO" "$ENCLAVE_COMMIT"
+          git -C "$dir" checkout -q --detach FETCH_HEAD
+          [ "$(git -C "$dir" rev-parse HEAD)" = "$ENCLAVE_COMMIT" ] || { echo "::error::$ENCLAVE_REPO answered another commit than $ENCLAVE_COMMIT" >&2; exit 1; }
+      - if: steps.newest.outputs.current != 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ runner.temp }}/enclave/go.mod
+          cache: false
+      # Builds the check the sign step runs on each bundle: the bundle's one Rekor v2 entry must
+      # verify under rekorv2.Verify, with the shard from Sigstore's TUF set, and at least 3 witnesses
+      # of WITNESSES must have cosigned its checkpoint, at most once per witness name and once per
+      # operator, each counted at a time at or before the certificate's NotAfter. That is the count
+      # pinsig makes, with the same code.
+      - id: cosignatures
+        if: steps.newest.outputs.current != 'true'
+        env:
+          GOTOOLCHAIN: local
+          GOFLAGS: -mod=readonly
+        run: |
+          set -euo pipefail
+          dir=$RUNNER_TEMP/enclave/cmd/morse-pins-cosignatures
+          [ ! -e "$dir" ] || { echo "::error::$dir already exists in $ENCLAVE_REPO at $ENCLAVE_COMMIT" >&2; exit 1; }
+          mkdir "$dir"
+          cat >"$dir/main.go" <<'EOF'
+          // Command cosignatures counts the witness cosignatures on the Rekor v2
+          // checkpoint of a Sigstore bundle with the verifier the enclave runs,
+          // internal/sigstore/rekorv2, so the signer and pinsig count the same way.
+          //
+          //	cosignatures tuf <base URL>  writes Sigstore's TUF set, as tuf.Set JSON
+          //	cosignatures count <set> <bundle>
+          //
+          // count exits 0 when at least k witnesses that WITNESSES lists cosigned the
+          // checkpoint at or before the certificate's NotAfter, 2 when fewer did, and
+          // 1 when the bundle or the set does not verify.
+          package main
+
+          import (
+          	"bytes"
+          	"crypto/sha256"
+          	"crypto/x509"
+          	"encoding/hex"
+          	"encoding/json"
+          	"errors"
+          	"fmt"
+          	"io"
+          	"net/http"
+          	"os"
+          	"strconv"
+          	"strings"
+          	"time"
+
+          	"morse/backend/internal/sigstore/rekorv2"
+          	"morse/backend/internal/sigstore/tuf"
+          )
+
+          // k is witnessK in internal/door/trust.go.
+          const k = 3
+
+          const (
+          	exitShort  = 2
+          	maxTUFFile = 1 << 20
+          	maxRoots   = 64
+          	bundleType = "application/vnd.dev.sigstore.bundle.v0.3+json"
+          )
+
+          type short struct{ why string }
+
+          func (s short) Error() string { return s.why }
+
+          func main() {
+          	var err error
+          	switch {
+          	case len(os.Args) == 3 && os.Args[1] == "tuf":
+          		err = fetchTUF(os.Args[2])
+          	case len(os.Args) == 4 && os.Args[1] == "count":
+          		err = count(os.Args[2], os.Args[3], os.Getenv("WITNESSES"))
+          	default:
+          		err = errors.New("usage: cosignatures tuf <base URL> | cosignatures count <set> <bundle>")
+          	}
+          	var s short
+          	switch {
+          	case errors.As(err, &s):
+          		fmt.Fprintln(os.Stderr, "cosignatures:", err)
+          		os.Exit(exitShort)
+          	case err != nil:
+          		fmt.Fprintln(os.Stderr, "cosignatures:", err)
+          		os.Exit(1)
+          	}
+          }
+
+          type bundle struct {
+          	MediaType            string `json:"mediaType"`
+          	VerificationMaterial struct {
+          		Certificate struct {
+          			RawBytes []byte `json:"rawBytes"`
+          		} `json:"certificate"`
+          		TlogEntries []json.RawMessage `json:"tlogEntries"`
+          	} `json:"verificationMaterial"`
+          	MessageSignature struct {
+          		MessageDigest struct {
+          			Algorithm string `json:"algorithm"`
+          			Digest    []byte `json:"digest"`
+          		} `json:"messageDigest"`
+          		Signature []byte `json:"signature"`
+          	} `json:"messageSignature"`
+          }
+
+          func policy(witnesses string) (rekorv2.WitnessPolicy, error) {
+          	var parsed []rekorv2.Witness
+          	for _, line := range strings.Split(strings.TrimSpace(witnesses), "\n") {
+          		vkey, operator, _ := strings.Cut(strings.TrimSpace(line), " ")
+          		w, err := rekorv2.ParseWitness(vkey, operator)
+          		if err != nil {
+          			return rekorv2.WitnessPolicy{}, fmt.Errorf("WITNESSES: %w", err)
+          		}
+          		parsed = append(parsed, w)
+          	}
+          	return rekorv2.NewWitnessPolicy(k, parsed...)
+          }
+
+          func count(setPath, bundlePath, witnesses string) error {
+          	p, err := policy(witnesses)
+          	if err != nil {
+          		return err
+          	}
+          	raw, err := os.ReadFile(bundlePath)
+          	if err != nil {
+          		return err
+          	}
+          	var b bundle
+          	if err := json.Unmarshal(raw, &b); err != nil {
+          		return fmt.Errorf("%s is not a bundle: %w", bundlePath, err)
+          	}
+          	if b.MediaType != bundleType {
+          		return fmt.Errorf("%s is a %q, not a %s", bundlePath, b.MediaType, bundleType)
+          	}
+          	if n := len(b.VerificationMaterial.TlogEntries); n != 1 {
+          		return fmt.Errorf("%s carries %d log entries, not one", bundlePath, n)
+          	}
+          	cert, err := x509.ParseCertificate(b.VerificationMaterial.Certificate.RawBytes)
+          	if err != nil {
+          		return fmt.Errorf("%s carries no certificate: %w", bundlePath, err)
+          	}
+          	digest := b.MessageSignature.MessageDigest
+          	if digest.Algorithm != "SHA2_256" || len(digest.Digest) != sha256.Size {
+          		return fmt.Errorf("%s does not sign a SHA2_256 digest", bundlePath)
+          	}
+          	setJSON, err := os.ReadFile(setPath)
+          	if err != nil {
+          		return err
+          	}
+          	var set tuf.Set
+          	if err := json.Unmarshal(setJSON, &set); err != nil {
+          		return fmt.Errorf("%s is not a TUF set: %w", setPath, err)
+          	}
+          	// The set is checked at the signing time, when the shard must have been
+          	// valid. A set fetched after signing is valid then too.
+          	root, err := tuf.Verify(tuf.SigstoreRoot(), set, cert.NotBefore)
+          	if err != nil {
+          		return err
+          	}
+          	shards, err := rekorv2.ParseShards(root)
+          	if err != nil {
+          		return err
+          	}
+          	entry, err := rekorv2.Verify(b.VerificationMaterial.TlogEntries[0], shards, p, rekorv2.At(cert.NotBefore))
+          	var refusal *rekorv2.Refusal
+          	if errors.As(err, &refusal) && refusal.Reason == rekorv2.TooFewWitnesses {
+          		return short{fmt.Sprintf("%s: %v", bundlePath, err)}
+          	}
+          	if err != nil {
+          		return fmt.Errorf("%s: %w", bundlePath, err)
+          	}
+          	body := entry.Body()
+          	if !bytes.Equal(body.Certificate, b.VerificationMaterial.Certificate.RawBytes) || !bytes.Equal(body.Digest[:], digest.Digest) || !bytes.Equal(body.Signature, b.MessageSignature.Signature) {
+          		return fmt.Errorf("%s: the log entry is not of the bundle's certificate, digest and signature", bundlePath)
+          	}
+          	counted := 0
+          	for _, c := range entry.Checkpoint().Cosigners() {
+          		when := "after"
+          		if !c.Time.After(cert.NotAfter) {
+          			counted++
+          			when = "at or before"
+          		}
+          		fmt.Printf("%s (%s) cosigned at %s, %s the certificate's NotAfter %s\n", c.Name, c.Operator, c.Time.Format(time.RFC3339), when, cert.NotAfter.UTC().Format(time.RFC3339))
+          	}
+          	if counted < k {
+          		return short{fmt.Sprintf("%s: %d of the %d cosignatures needed are at or before the certificate's NotAfter", bundlePath, counted, k)}
+          	}
+          	fmt.Printf("%s: %d witnesses cosigned %s entry %d at or before the certificate's NotAfter\n", bundlePath, counted, entry.Origin(), entry.Index())
+          	return nil
+          }
+
+          func get(base, path string) ([]byte, int, error) {
+          	client := http.Client{Timeout: 30 * time.Second}
+          	res, err := client.Get(base + "/" + path)
+          	if err != nil {
+          		return nil, 0, err
+          	}
+          	defer res.Body.Close()
+          	body, err := io.ReadAll(io.LimitReader(res.Body, maxTUFFile+1))
+          	if err == nil && len(body) > maxTUFFile {
+          		err = fmt.Errorf("%s is over %d bytes", path, maxTUFFile)
+          	}
+          	return body, res.StatusCode, err
+          }
+
+          func getOK(base, path string) ([]byte, error) {
+          	body, status, err := get(base, path)
+          	if err == nil && status != http.StatusOK {
+          		err = fmt.Errorf("%s answered %d", path, status)
+          	}
+          	return body, err
+          }
+
+          type meta struct {
+          	Signed struct {
+          		Version int64 `json:"version"`
+          		Meta    map[string]struct {
+          			Version int64 `json:"version"`
+          		} `json:"meta"`
+          		Targets map[string]struct {
+          			Hashes map[string]string `json:"hashes"`
+          		} `json:"targets"`
+          	} `json:"signed"`
+          }
+
+          func parse(name string, b []byte) (meta, error) {
+          	var m meta
+          	if err := json.Unmarshal(b, &m); err != nil {
+          		return m, fmt.Errorf("%s: %w", name, err)
+          	}
+          	return m, nil
+          }
+
+          // fetchTUF reads the set as the door's host does, in the layout of
+          // Sigstore's TUF repository: every root after the embedded one, then the
+          // timestamp, the snapshot and targets versions they name, and
+          // trusted_root.json by its sha256. count verifies the set.
+          func fetchTUF(base string) error {
+          	embedded, err := parse("the embedded root", tuf.SigstoreRoot())
+          	if err != nil {
+          		return err
+          	}
+          	var set tuf.Set
+          	for v := embedded.Signed.Version + 1; ; v++ {
+          		if v > embedded.Signed.Version+maxRoots {
+          			return fmt.Errorf("more than %d roots follow the embedded one", maxRoots)
+          		}
+          		root, status, err := get(base, strconv.FormatInt(v, 10)+".root.json")
+          		if err != nil {
+          			return err
+          		}
+          		if status == http.StatusNotFound {
+          			break
+          		}
+          		if status != http.StatusOK {
+          			return fmt.Errorf("%d.root.json answered %d", v, status)
+          		}
+          		set.Roots = append(set.Roots, root)
+          	}
+          	if set.Timestamp, err = getOK(base, "timestamp.json"); err != nil {
+          		return err
+          	}
+          	timestamp, err := parse("timestamp.json", set.Timestamp)
+          	if err != nil {
+          		return err
+          	}
+          	if set.Snapshot, err = getOK(base, strconv.FormatInt(timestamp.Signed.Meta["snapshot.json"].Version, 10)+".snapshot.json"); err != nil {
+          		return err
+          	}
+          	snapshot, err := parse("snapshot.json", set.Snapshot)
+          	if err != nil {
+          		return err
+          	}
+          	if set.Targets, err = getOK(base, strconv.FormatInt(snapshot.Signed.Meta["targets.json"].Version, 10)+".targets.json"); err != nil {
+          		return err
+          	}
+          	targets, err := parse("targets.json", set.Targets)
+          	if err != nil {
+          		return err
+          	}
+          	hash := targets.Signed.Targets["trusted_root.json"].Hashes["sha256"]
+          	if sum, err := hex.DecodeString(hash); err != nil || len(sum) != sha256.Size {
+          		return errors.New("targets.json lists no sha256 for trusted_root.json")
+          	}
+          	if set.TrustedRoot, err = getOK(base, "targets/"+hash+".trusted_root.json"); err != nil {
+          		return err
+          	}
+          	if sum := sha256.Sum256(set.TrustedRoot); hex.EncodeToString(sum[:]) != hash {
+          		return errors.New("trusted_root.json does not hash to the sha256 targets.json lists")
+          	}
+          	return json.NewEncoder(os.Stdout).Encode(set)
+          }
+          EOF
+          go -C "$RUNNER_TEMP/enclave" build -trimpath -o "$RUNNER_TEMP/cosignatures" ./cmd/morse-pins-cosignatures
+      # Signs each statement and checks its bundle. A checkpoint that fewer than 3 witnesses cosigned
+      # in time is not repaired: the statement is signed again, which makes a fresh signature, a new
+      # entry and a new checkpoint, up to TRIES signatures a statement. Rekor v2 does not wait for slow
+      # witnesses, so a short checkpoint is expected now and then. A statement still short after TRIES
+      # signatures fails the run, which commits nothing, and the next hourly run signs again. A short
+      # entry stays in the log, which costs nothing.
+      - id: sign
+        if: steps.newest.outputs.current != 'true'
+        env:
+          COMMIT: ${{ steps.head.outputs.commit }}
+          TUF_URL: https://tuf-repo-cdn.sigstore.dev
+          TRIES: 3
+        run: |
+          set -euo pipefail
+          cosign=$RUNNER_TEMP/cosign
+          checker=$RUNNER_TEMP/cosignatures
+          tuf=$RUNNER_TEMP/tuf.json
+          "$checker" tuf "$TUF_URL" >"$tuf" || { echo "::error::Sigstore's TUF set could not be read from $TUF_URL, so nothing is signed." >&2; exit 1; }
+          for statement in "$RUNNER_TEMP"/signed/*.statement.json; do
+            bundle=${statement%.statement.json}.sigstore.json
+            for try in $(seq "$TRIES"); do
+              rm -f -- "$bundle"
+              "$cosign" sign-blob --yes --signing-config "$SIGNING_CONFIG" --bundle "$bundle" "$statement"
+              "$cosign" verify-blob --bundle "$bundle" --use-signed-timestamps --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+                --certificate-github-workflow-sha "$COMMIT" "$statement"
+              status=0
+              "$checker" count "$tuf" "$bundle" || status=$?
+              [ "$status" -ne 0 ] || continue 2
+              [ "$status" -eq 2 ] || { echo "::error::the bundle of $(basename "$statement") does not verify as a Rekor v2 entry, so nothing is committed." >&2; exit 1; }
+              echo "::warning::signature $try of $TRIES of $(basename "$statement") has too few cosignatures, so it is signed again."
+            done
+            echo "::error::$TRIES signatures in a row of $(basename "$statement") had too few cosignatures, so nothing is committed. The next hourly run signs again." >&2
+            exit 1
+          done
+      # Commits each statement and its bundle as <name>/<sequence>-<time>.statement.json and
+      # .sigstore.json, and <name>/index.json, to the statements branch, on top of what it holds. The
+      # index names the 10 statements of the name with the highest sequence, highest first, and the
+      # newest first within one sequence, which is the order the door's host offers them in. A push
+      # by GITHUB_TOKEN starts no workflow, so this commit cannot start another run.
+      - id: commit
+        if: steps.newest.outputs.current != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEQUENCE: ${{ steps.head.outputs.sequence }}
+          COMMIT: ${{ steps.head.outputs.commit }}
+          TIME: ${{ steps.head.outputs.time }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          export GIT_INDEX_FILE=$RUNNER_TEMP/statements.index
+          branch=refs/heads/$STATEMENTS_BRANCH
+          ref=refs/remotes/origin/$STATEMENTS_BRANCH
+          stamp=${TIME//[-:]/}
+          [[ $SEQUENCE =~ ^[1-9][0-9]{0,8}$ ]] && [[ $stamp =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "::error::bad sequence $SEQUENCE or time $TIME" >&2; exit 1; }
+          found=0
+          git ls-remote --exit-code origin "$branch" >/dev/null || found=$?
+          parents=()
+          case $found in
+            0)
+              git fetch -q --no-tags origin "+$branch:$ref"
+              parents=(-p "$(git rev-parse "$ref^{commit}")")
+              git read-tree "$ref"
+              ;;
+            2) git read-tree --empty ;;
+            *) echo "::error::$branch of origin could not be read, so nothing is committed." >&2; exit 1 ;;
+          esac
+          names=()
+          for statement in "$RUNNER_TEMP"/signed/*.statement.json; do
+            name=$(basename "$statement" .statement.json)
+            [[ $name =~ ^(dev|prod|vendor)$ ]] || { echo "::error::unknown statement $name" >&2; exit 1; }
+            names+=("$name")
+            for suffix in statement.json sigstore.json; do
+              path=$name/$SEQUENCE-$stamp.$suffix
+              [ -z "$(git ls-files -- "$path")" ] || { echo "::error::$STATEMENTS_BRANCH already holds $path, so nothing is committed." >&2; exit 1; }
+              git update-index --add --cacheinfo "100644,$(git hash-object -w -- "${statement%.statement.json}.$suffix"),$path"
+            done
+            git ls-files -- "$name/" | jq -Rn --arg name "$name" '
+              [inputs | capture("^\($name)/(?<sequence>[1-9][0-9]{0,8})-(?<stamp>[0-9]{8}T[0-9]{6}Z)\\.statement\\.json$")
+                | {sequence: (.sequence | tonumber),
+                   time: (.stamp | "\(.[0:4])-\(.[4:6])-\(.[6:8])T\(.[9:11]):\(.[11:13]):\(.[13:15])Z"),
+                   statement: "\($name)/\(.sequence)-\(.stamp).statement.json",
+                   bundle: "\($name)/\(.sequence)-\(.stamp).sigstore.json"}]
+              | sort_by(.sequence, .time) | reverse | .[:10]' >"$RUNNER_TEMP/index.json"
+            for bundle in $(jq -r '.[].bundle' "$RUNNER_TEMP/index.json"); do
+              [ -n "$(git ls-files -- "$bundle")" ] || { echo "::error::$STATEMENTS_BRANCH holds no $bundle, so nothing is committed." >&2; exit 1; }
+            done
+            git update-index --add --cacheinfo "100644,$(git hash-object -w -- "$RUNNER_TEMP/index.json"),$name/index.json"
+          done
+          commit=$(git commit-tree "$(git write-tree)" "${parents[@]}" \
+            -m "Sign ${names[*]} at sequence $SEQUENCE" \
+            -m "Signed at $COMMIT by the first attempt of $GITHUB_EVENT_NAME run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID.")
+          git -c http.extraHeader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push -q origin "$commit:$branch"
+          echo "committed ${names[*]} at sequence $SEQUENCE to $STATEMENTS_BRANCH as $commit"
