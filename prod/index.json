@@ -1,0 +1,8 @@
+[
+  {
+    "sequence": 248,
+    "time": "2026-11-10T07:27:10Z",
+    "statement": "prod/248-20261110T072710Z.statement.json",
+    "bundle": "prod/248-20261110T072710Z.sigstore.json"
+  }
+]
