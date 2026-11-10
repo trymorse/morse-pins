@@ -619,15 +619,6 @@ jobs:
           checker=$RUNNER_TEMP/cosignatures
           enclave=$RUNNER_TEMP/enclave
 
-          # The witnesses and their count are trust.go's at the pinned commit of the enclave source.
-          trust=$(sed -nE 's/^[[:space:]]*\{"([^"]+)", "([^"]+)"\},$/\1 \2/p' "$enclave/internal/door/trust.go")
-          if [ -z "$trust" ] || [ "$trust" != "$witnesses" ]; then
-            echo "FAIL: WITNESSES is not the witness list of internal/door/trust.go:"; echo "$trust"; failed=1
-          fi
-          k=$(sed -nE 's/^const k = ([0-9]+)$/\1/p' "$enclave/cmd/morse-pins-cosignatures/main.go")
-          if [ -z "$k" ] || [ "$k" != "$(sed -nE 's/^const witnessK = ([0-9]+)$/\1/p' "$enclave/internal/door/trust.go")" ] || [ "$k" != 3 ]; then
-            echo "FAIL: the cosignatures check needs $k witnesses, not trust.go's witnessK of 3"; failed=1
-          fi
           if [ "$tries" != 3 ]; then
             echo "FAIL: a statement is signed up to $tries times, not 3"; failed=1
           fi
@@ -713,6 +704,42 @@ jobs:
           EOF
           go -C "$enclave" build -o "$RUNNER_TEMP/forge" ./cmd/forge
           forge=$RUNNER_TEMP/forge
+
+          # The helper's policy from WITNESSES is the policy door.Production trusts, keys and k alike.
+          cat >"$enclave/cmd/morse-pins-cosignatures/policy_test.go" <<'EOF'
+          package main
+
+          import (
+          	"os"
+          	"reflect"
+          	"testing"
+
+          	"morse/backend/internal/door"
+          )
+
+          func TestPolicyIsTrust(t *testing.T) {
+          	trust, err := door.Production()
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	p, err := policy(os.Getenv("WITNESSES"))
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if !reflect.DeepEqual(trust.Witnesses, p) {
+          		t.Fatalf("WITNESSES with k = %d is not door.Production's witness policy", k)
+          	}
+          }
+          EOF
+          if ! WITNESSES=$witnesses go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >"$RUNNER_TEMP/out" 2>&1; then
+            echo "FAIL: WITNESSES is not the witness policy of internal/door/trust.go:"; cat "$RUNNER_TEMP/out"; failed=1
+          fi
+          if WITNESSES=$(sed 1d <<<"$witnesses") go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >/dev/null 2>&1; then
+            echo "FAIL: the policy check passed WITNESSES without its first witness"; failed=1
+          fi
+          if WITNESSES=$(printf '%s IPng Networks\n' "$("$forge" vkey krabbel.ct.ipng.ch swapped)"; sed 1d <<<"$witnesses") go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >/dev/null 2>&1; then
+            echo "FAIL: the policy check passed WITNESSES with a forged key for krabbel.ct.ipng.ch"; failed=1
+          fi
 
           # Sigstore's TUF set as fetched on 2026-11-10, served in the layout of its repository.
           python3 -m http.server --bind 127.0.0.1 --directory .github/testdata/tuf 8721 >"$RUNNER_TEMP/http.log" 2>&1 &
