@@ -1,0 +1,1101 @@
+name: check
+
+# Tests the signer before a change to it reaches main. Each job takes the steps it tests from
+# sign.yml, so the tests run the code that signs. Changes to sign.yml go through a pull request so
+# these run first.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Fails on a repository variable or secret in any workflow, since a watcher cannot read either and
+  # a statement would then depend on it; on a uses: that is not pinned to a 40-hex commit SHA, since
+  # a moved tag would change what the signer runs with no commit here for the watcher's allowlist
+  # to see; and on a signing config that names a log other than a Rekor v2 shard.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: lint
+        run: |
+          set -euo pipefail
+          failed=0
+          for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$workflow" ] || continue
+            if grep -nE '(vars|secrets)\.' "$workflow"; then
+              echo "::error file=$workflow::$workflow reads a repository variable or secret, which a watcher cannot read"
+              failed=1
+            fi
+            uses=$(yq '.. | select(tag == "!!map" and has("uses")) | .uses' "$workflow")
+            unpinned=$(grep -vxE '[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}' <<<"$uses" || true)
+            if [ -n "$uses" ] && [ -n "$unpinned" ]; then
+              echo "::error file=$workflow::$workflow uses $unpinned, which is not pinned to a 40-hex commit SHA"
+              failed=1
+            fi
+          done
+          config=$(yq -e '.jobs.sign.env.SIGNING_CONFIG' .github/workflows/sign.yml)
+          if ! jq -e '.mediaType == "application/vnd.dev.sigstore.signingconfig.v0.2+json"
+            and (.rekorTlogUrls | type == "array" and length > 0
+              and all(.[]; .majorApiVersion == 2 and (.url | type == "string" and test("^https://log[0-9]{4}-[0-9]+\\.rekor\\.sigstore\\.dev$"))))' "$config" >/dev/null; then
+            echo "::error file=$config::$config names a Rekor v1 log, or no Rekor v2 shard"
+            failed=1
+          fi
+          exit $failed
+      - run: |
+          set -euo pipefail
+          lint=$RUNNER_TEMP/lint.sh
+          yq -e '.jobs.lint.steps[] | select(.id == "lint") | .run' .github/workflows/check.yml >"$lint"
+          failed=0
+          # Assembled, so that this file neither reads a variable or secret nor holds an expression.
+          var=$(printf '%s' va rs.)
+          secret=$(printf '%s' secr ets.)
+          expression() { printf '%s{{ %s }}' '$' "$1"; }
+
+          lints() { (cd "$1" && bash --noprofile --norc -eo pipefail "$lint" >/dev/null 2>&1); }
+          # Copies .github, runs the command in the copy, and prints the copy's directory.
+          mutated() {
+            local dir
+            dir=$(mktemp -d)
+            cp -R .github "$dir/"
+            (cd "$dir" && "$@") >/dev/null
+            echo "$dir"
+          }
+          refuses() {
+            local why=$1 dir
+            shift
+            dir=$(mutated "$@")
+            if lints "$dir"; then
+              echo "FAIL: the lint passed $why"; failed=1
+            fi
+          }
+          # shellcheck disable=SC2329 # mutated runs these
+          edit() { VALUE=$3 yq -i "$2 = strenv(VALUE)" "$1"; }
+          # shellcheck disable=SC2329
+          append() { printf '%s\n' "$2" >>"$1"; }
+          # shellcheck disable=SC2329
+          config() { jq "$1" .github/workflows/sigstore-signing-config.json >x && mv x .github/workflows/sigstore-signing-config.json; }
+          v1='{"url": "https://rekor.sigstore.dev", "majorApiVersion": 1, "validFor": {"start": "2021-01-12T11:53:27.000Z"}, "operator": "sigstore.dev"}'
+
+          if ! lints "$(mutated true)"; then
+            echo "FAIL: the lint refused the workflows as they are"; failed=1
+          fi
+          refuses "a repository variable in sign.yml" edit .github/workflows/sign.yml .jobs.sign.env.X "$(expression "${var}X")"
+          refuses "a secret in sign.yml" edit .github/workflows/sign.yml .jobs.sign.env.X "$(expression "${secret}X")"
+          refuses "a repository variable in a comment" append .github/workflows/sign.yml "# ${var}X"
+          refuses "a secret in check.yml" edit .github/workflows/check.yml .jobs.lint.env.X "$(expression "${secret}X")"
+          refuses "a uses: on a tag" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@v7.0.1
+          refuses "a uses: on a branch" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@main
+          refuses "a uses: on 39 hex digits" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b
+          refuses "a uses: on uppercase hex" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@3D3C42E5AAC5BA805825DA76410C181273BA90B1
+          refuses "a uses: with a trailing word" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 x'
+          refuses "a local action" edit .github/workflows/check.yml '.jobs.lint.steps[0].uses' ./.github/actions/checkout
+          refuses "a docker action" edit .github/workflows/check.yml '.jobs.lint.steps[0].uses' docker://alpine:3
+          refuses "a reusable workflow on a branch" edit .github/workflows/check.yml .jobs.called.uses trymorse/morse-pins/.github/workflows/sign.yml@main
+          refuses "a uses: in flow style" append .github/workflows/check.yml '  flow: {runs-on: ubuntu-latest, steps: [{uses: actions/checkout@v4}]}'
+          refuses "a .yaml workflow on a tag" append .github/workflows/other.yaml 'jobs: {x: {runs-on: ubuntu-latest, steps: [{uses: actions/checkout@v4}]}}'
+          refuses "a signing config that adds the Rekor v1 log" config ".rekorTlogUrls += [$v1]"
+          refuses "a signing config that names only the Rekor v1 log" config ".rekorTlogUrls = [$v1]"
+          refuses "a signing config that names the Rekor v1 URL as v2" config '.rekorTlogUrls[0].url = "https://rekor.sigstore.dev"'
+          refuses "a signing config that names a shard as v1" config '.rekorTlogUrls[0].majorApiVersion = 1'
+          refuses "a signing config with no Rekor log" config '.rekorTlogUrls = []'
+          refuses "a signing config of another version" config '.mediaType = "application/vnd.dev.sigstore.signingconfig.v0.1+json"'
+          refuses "sign.yml naming a signing config with the Rekor v1 log" sh -c "jq '.rekorTlogUrls += [$v1]' .github/workflows/sigstore-signing-config.json >.github/workflows/v1.json && VALUE=.github/workflows/v1.json yq -i '.jobs.sign.env.SIGNING_CONFIG = strenv(VALUE)' .github/workflows/sign.yml"
+          exit $failed
+
+  sign-statement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          step=$RUNNER_TEMP/statements.sh
+          yq -e '.jobs.sign.steps[] | select(.id == "statements") | .run' .github/workflows/sign.yml >"$step"
+          vendor_files=$(yq -e '.jobs.sign.env.VENDOR_FILES' .github/workflows/sign.yml)
+          pins=$PWD/enclave_pins.json
+          failed=0
+          export GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.com GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@example.com
+
+          # Each vendor fixture is written with its keys out of order and with spaces, and its expected
+          # hash is the sha256 of the RFC 8785 bytes written by hand, so the test holds the step to JCS.
+          vendors=$RUNNER_TEMP/vendors
+          mkdir "$vendors"
+          printf '{"version": 1,\n "apps": ["near"]}\n' >"$vendors/near_pins.json"
+          printf '{"version":1,"containers":[]}' >"$vendors/phala_model_pins.json"
+          printf '{\n\t"version": 1,\n\t"identity": "phala"\n}\n' >"$vendors/phala_pins.json"
+          printf '{"version":1,"hosts":["h"]}\n' >"$vendors/tinfoil_pins.json"
+          assets="dev.statement.json prod.statement.json vendor.statement.json"
+
+          # Commits everything in the repository $1, made if need be.
+          commit() {
+            [ -d "$1/.git" ] || git -c init.defaultBranch=main init -q "$1"
+            git -C "$1" add -A
+            git -C "$1" commit -q --allow-empty -m "${2:-pins}"
+          }
+          # Makes a directory whose repo/ commits the enclave pins of $2 filtered by $1 and the vendor
+          # files of $3, and prints it. The step writes its statements to its signed/.
+          pins_dir() {
+            local dir file
+            dir=$(mktemp -d)
+            mkdir "$dir/repo"
+            jq "$1" "$2" >"$dir/repo/enclave_pins.json"
+            for file in $vendor_files; do
+              cp "${3:-$vendors}/$file" "$dir/repo/"
+            done
+            commit "$dir/repo"
+            echo "$dir"
+          }
+          # Runs the step in $1/repo with sequence $2 and time $3, signing commit $4 or the repository's HEAD.
+          statements() {
+            (cd "$1/repo" && RUNNER_TEMP=$1 VENDOR_FILES=$vendor_files SEQUENCE=$2 COMMIT=${4:-$(git rev-parse HEAD)} TIME=$3 bash --noprofile --norc -eo pipefail "$step")
+          }
+
+          hex() { printf "$1%.0s" {1..96}; }
+          fixture=$RUNNER_TEMP/fixture.json
+          printf '[{"tag":"v2026.1.1","environment":"prod","pcr0":"%s","pcr1":"%s","pcr2":"%s","built_at":"2026-01-01T00:00:00Z","revoked":false},
+            {"tag":"v2026.1.2-3-g0123456","environment":"dev","pcr0":"%s","pcr1":"%s","pcr2":"%s","built_at":"2026-01-02T00:00:00Z","revoked":false},
+            {"tag":"v2026.1.0","environment":"prod","pcr0":"%s","pcr1":"%s","pcr2":"%s","built_at":"2025-12-31T00:00:00Z","revoked":true}]\n' \
+            "$(hex c)" "$(hex d)" "$(hex e)" \
+            "$(hex 1)" "$(hex 2)" "$(hex 3)" \
+            "$(hex a)" "$(hex b)" "$(hex f)" >"$fixture"
+          for inputs in "101 2026-11-03T04:17:00Z" "202 2027-01-02T03:04:05Z"; do
+            read -r sequence time <<<"$inputs"
+            dir=$(pins_dir . "$fixture")
+            commit=$(git -C "$dir/repo" rev-parse HEAD)
+            if ! statements "$dir" "$sequence" "$time"; then
+              echo "FAIL: the fixture pins are refused with sequence $sequence"; failed=1
+              continue
+            fi
+            printf '{"environment":"dev","images":[{"pcr0":"%s","pcr1":"%s","pcr2":"%s","revoked":false}],"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-enclave-pins-v1"}' \
+              "$(hex 1)" "$(hex 2)" "$(hex 3)" "$commit" "$sequence" "$time" >"$dir/dev.want"
+            printf '{"environment":"prod","images":[{"pcr0":"%s","pcr1":"%s","pcr2":"%s","revoked":true},{"pcr0":"%s","pcr1":"%s","pcr2":"%s","revoked":false}],"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-enclave-pins-v1"}' \
+              "$(hex a)" "$(hex b)" "$(hex f)" "$(hex c)" "$(hex d)" "$(hex e)" "$commit" "$sequence" "$time" >"$dir/prod.want"
+            printf '{"files":{"v4/near_pins.json":"e33d060b9109ff309755b7c6fd244147f9dca651e79aab33607a797423397dc3","v4/phala_model_pins.json":"b82ceaa08f0721d27f1c8c4b4ca6570b0396e16f3c1f6b2f23bd309408891df0","v4/phala_pins.json":"ce08f3e4859f0adcc28e2dc92f26f55f19865ea317f9272a40bd0f422fc9fb5c","v4/tinfoil_pins.json":"6cfdbf49b2d582eb5fb1f6ddda3f6e1099f2cd45bfd7cf54917d7608ca7036cb"},"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-vendor-pins-v1"}' \
+              "$commit" "$sequence" "$time" >"$dir/vendor.want"
+            if [ "$(cd "$dir/signed" && echo *)" != "$assets" ]; then
+              echo "FAIL: the files written with sequence $sequence are $(cd "$dir/signed" && echo *), not $assets"; failed=1
+            fi
+            for name in dev prod vendor; do
+              if ! cmp "$dir/$name.want" "$dir/signed/$name.statement.json"; then
+                echo "FAIL: the $name statement with sequence $sequence is not these bytes:"; cat "$dir/$name.want"; echo; failed=1
+              fi
+            done
+          done
+
+          # The vendor statement hashes the four vendor files at the signed commit, keyed by their path
+          # in the private pins repository.
+          dir=$(pins_dir . "$pins" "$PWD")
+          read -ra vendor <<<"$vendor_files"
+          keys=$(printf 'v4/%s\n' "${vendor[@]}" | paste -sd' ')
+          if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
+            echo "FAIL: the real pins are refused"; failed=1
+          elif [ "$(cd "$dir/signed" && echo *)" != "$assets" ]; then
+            echo "FAIL: the files written are $(cd "$dir/signed" && echo *), not $assets"; failed=1
+          elif [ "$(jq -r '.files | keys | join(" ")' "$dir/signed/vendor.statement.json")" != "$keys" ]; then
+            echo "FAIL: the real vendor statement hashes $(jq -r '.files | keys | join(" ")' "$dir/signed/vendor.statement.json"), not $keys"; failed=1
+          else
+            for file in $vendor_files; do
+              want=$(git -C "$dir/repo" show "HEAD:$file" | jq -jcS . | sha256sum | cut -c1-64)
+              if [ "$(jq -r --arg key "v4/$file" '.files[$key]' "$dir/signed/vendor.statement.json")" != "$want" ]; then
+                echo "FAIL: the vendor statement does not hash $file at the signed commit as $want"; failed=1
+              fi
+            done
+          fi
+          dir=$(pins_dir . "$pins" "$PWD")
+          first=$(git -C "$dir/repo" rev-parse HEAD)
+          echo note >"$dir/repo/NOTES"
+          commit "$dir/repo" "a file nothing signs"
+          if ! statements "$dir" 101 2026-11-03T04:17:00Z "$first"; then
+            echo "FAIL: refused to sign an older commit whose signed files are the checkout's"; failed=1
+          elif [ "$(jq -r .pins_commit "$dir/signed/vendor.statement.json")" != "$first" ]; then
+            echo "FAIL: the vendor statement does not name the signed commit"; failed=1
+          fi
+
+          refuses() {
+            local dir
+            dir=$(pins_dir "$2" "$pins")
+            if statements "$dir" 101 2026-11-03T04:17:00Z >/dev/null 2>&1; then
+              echo "FAIL: signed a statement with $1"; failed=1
+            fi
+          }
+          first='(map(.environment == "dev") | index(true))'
+          refuses "a null pcr1" ".[$first].pcr1 = null"
+          refuses "a missing pcr2" ".[$first] |= del(.pcr2)"
+          refuses "a numeric pcr0" ".[$first].pcr0 = 7"
+          refuses "an uppercase pcr1" ".[$first].pcr1 |= ascii_upcase"
+          refuses "a short pcr0" ".[$first].pcr0 |= .[1:]"
+          refuses "a pcr0 with a trailing newline" ".[$first].pcr0 += \"\\n\""
+          refuses "a string revoked" ".[$first].revoked = \"false\""
+          refuses "a pcr0 listed twice" ". + [.[$first]]"
+          refuses "an unknown environment" ".[$first].environment = \"staging\""
+
+          # Runs $2 in the repository, commits it unless $4 says not to, and checks the step refuses
+          # with $3.
+          refuses_change() {
+            local dir err
+            dir=$(pins_dir . "$pins")
+            (cd "$dir/repo" && eval "$2")
+            [ "${4:-}" = uncommitted ] || commit "$dir/repo" "$1"
+            if err=$(statements "$dir" 101 2026-11-03T04:17:00Z 2>&1 >/dev/null); then
+              echo "FAIL: signed a statement when $1"; failed=1
+            elif [[ $err != *"$3"* ]]; then
+              echo "FAIL: when $1, the step did not say \"$3\" but: $err"; failed=1
+            fi
+          }
+          refuses_change "a vendor file differs from the signed commit's" 'printf "{}" >phala_pins.json' "phala_pins.json is not the regular file at" uncommitted
+          refuses_change "enclave_pins.json differs from the signed commit's" 'printf " " >>enclave_pins.json' "enclave_pins.json is not the regular file at" uncommitted
+          refuses_change "a vendor file is not in the signed commit" 'git rm -q --cached tinfoil_pins.json && git commit -qm drop' "tinfoil_pins.json is not the regular file at" uncommitted
+          refuses_change "the signed commit holds a vendor file as a symlink" 'mv near_pins.json near && ln -s near near_pins.json && git add -A && git commit -qm link && rm near_pins.json && mv near near_pins.json' "near_pins.json is not the regular file at" uncommitted
+          refuses_change "a vendor file is missing" 'rm tinfoil_pins.json' "tinfoil_pins.json is not a regular file"
+          refuses_change "a vendor file is a symlink" 'rm near_pins.json && ln -s phala_pins.json near_pins.json' "near_pins.json is not a regular file"
+          refuses_change "a vendor file is empty" ': >phala_pins.json' "is not one JSON document: Expecting value"
+          refuses_change "a vendor file is not JSON" 'echo "{" >phala_pins.json' "is not one JSON document: Expecting property name"
+          refuses_change "a vendor file holds two documents" 'printf "{}{}" >phala_pins.json' "is not one JSON document: Extra data"
+          refuses_change "a vendor file starts with a byte order mark" 'printf "\xef\xbb\xbf{}" >phala_pins.json' "is not one JSON document: Unexpected UTF-8 BOM"
+          refuses_change "a vendor file is not UTF-8" 'printf "{\"a\":\"\xff\"}" >phala_pins.json' "phala_pins.json is not UTF-8"
+          refuses_change "a vendor file lists a key twice" 'printf "{\"a\":1,\"a\":2}" >phala_pins.json' "lists the key 'a' twice"
+          refuses_change "a vendor file holds a float" 'printf "{\"a\":1.5}" >phala_pins.json' "holds the number 1.5,"
+          refuses_change "a vendor file holds an integer of 2^53" 'printf "{\"a\":9007199254740992}" >phala_pins.json' "holds the number 9007199254740992,"
+          refuses_change "a vendor file holds an integer of -2^53" 'printf "{\"a\":-9007199254740992}" >phala_pins.json' "holds the number -9007199254740992,"
+          refuses_change "a vendor file holds an integer spelled 1.0" 'printf "{\"a\":1.0}" >phala_pins.json' "holds the number 1.0,"
+          refuses_change "a vendor file holds an integer spelled 1e2" 'printf "{\"a\":1e2}" >phala_pins.json' "holds the number 1e2,"
+          refuses_change "a vendor file holds an integer spelled 10E0" 'printf "{\"a\":10E0}" >phala_pins.json' "holds the number 10E0,"
+          refuses_change "a vendor file holds an integer spelled 0.1e1" 'printf "{\"a\":0.1e1}" >phala_pins.json' "holds the number 0.1e1,"
+          refuses_change "a vendor file holds -0" 'printf "{\"a\":-0}" >phala_pins.json' "holds the number -0,"
+          refuses_change "a vendor file holds NaN" 'printf "{\"a\":NaN}" >phala_pins.json' "holds the number NaN,"
+          refuses_change "a vendor file holds an integer with a leading zero" 'printf "{\"a\":010}" >phala_pins.json' "is not one JSON document: Expecting ',' delimiter"
+          refuses_change "a vendor file holds an integer with a plus sign" 'printf "{\"a\":+1}" >phala_pins.json' "is not one JSON document: Expecting value"
+          refuses_change "a vendor file holds an integer spelled 1." 'printf "{\"a\":1.}" >phala_pins.json' "is not one JSON document: Expecting ',' delimiter"
+          refuses_change "a vendor file holds a non-ASCII key" 'printf "{\"\\u00e9\":1}" >phala_pins.json' "holds the key 'é', which is not printable ASCII"
+          refuses_change "a vendor file holds a key with a control character" 'printf "%s" "{\"a\\u0001\":1}" >phala_pins.json' "holds the key 'a\\x01', which is not printable ASCII"
+          refuses_change "a vendor file holds a string with U+007F" 'printf "{\"a\":\"x\\u007fy\"}" >phala_pins.json' "holds a string with a control character"
+          refuses_change "a vendor file holds a string with a control character" 'printf "%s" "{\"a\":\"x\\u001fy\"}" >phala_pins.json' "holds a string with a control character"
+          refuses_change "a vendor file holds a nested string with a control character" 'printf "%s" "{\"a\":[{\"b\":[\"\\n\"]}]}" >phala_pins.json' "holds a string with a control character"
+          refuses_change "a vendor file holds a lone high surrogate" 'printf "%s" "{\"a\":\"\\ud800\"}" >phala_pins.json' "holds a string with a lone surrogate"
+          refuses_change "a vendor file holds a reversed surrogate pair" 'printf "%s" "{\"a\":\"\\ude00\\ud83d\"}" >phala_pins.json' "holds a string with a lone surrogate"
+          refuses_change "a vendor file holds a lone low surrogate" 'printf "%s" "{\"a\":\"x\\udc00y\"}" >phala_pins.json' "holds a string with a lone surrogate"
+          refuses_change "a vendor file holds a nested lone low surrogate" 'printf "%s" "{\"a\":[\"\\udfff\"]}" >phala_pins.json' "holds a string with a lone surrogate"
+          refuses_change "a vendor file holds a key with a lone surrogate" 'printf "%s" "{\"\\ud800\":1}" >phala_pins.json' "holds the key '\\ud800', which is not printable ASCII"
+          refuses_change "a vendor file is a string" 'printf "\"s\"" >phala_pins.json' "is not a JSON object"
+          refuses_change "a vendor file is an array" 'printf "[]" >phala_pins.json' "is not a JSON object"
+          refuses_change "a vendor file nests 129 objects" '{ printf "%129s" "" | sed "s/ /{\"a\":/g"; printf 1; printf "%129s" "" | tr " " "}"; } >phala_pins.json' "nests deeper than 128"
+          refuses_change "a vendor file nests 128 arrays in an object" '{ printf "{\"a\":"; printf "%128s" "" | tr " " "["; printf "%128s" "" | tr " " "]"; printf "}"; } >phala_pins.json' "nests deeper than 128"
+          refuses_change "a vendor file nests 500 arrays in an object" '{ printf "{\"a\":"; printf "%500s" "" | tr " " "["; printf "%500s" "" | tr " " "]"; printf "}"; } >phala_pins.json' "nests deeper than 128"
+          refuses_change "a vendor file nests 10000 arrays in an object" '{ printf "{\"a\":"; printf "%10000s" "" | tr " " "["; printf "%10000s" "" | tr " " "]"; printf "}"; } >phala_pins.json' "nests deeper than 128"
+
+          accepts_vendor() {
+            local dir
+            dir=$(pins_dir . "$pins")
+            (cd "$dir/repo" && eval "$2")
+            commit "$dir/repo" "$1"
+            if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
+              echo "FAIL: refused a vendor file that holds $1"; failed=1
+            elif [ "$(jq -r '.files["v4/phala_pins.json"]' "$dir/signed/vendor.statement.json")" != "$(eval "$3" | sha256sum | cut -c1-64)" ]; then
+              echo "FAIL: a vendor file that holds $1 is not hashed as its RFC 8785 bytes"; failed=1
+            fi
+          }
+          accepts_vendor "the integers 2^53-1 and -(2^53-1)" 'printf "{\"b\": -9007199254740991, \"a\": 9007199254740991}" >phala_pins.json' 'printf "{\"a\":9007199254740991,\"b\":-9007199254740991}"'
+          accepts_vendor "an escaped surrogate pair" 'printf "%s" "{\"a\":\"\\ud83d\\ude00\"}" >phala_pins.json' 'printf "{\"a\":\"\xf0\x9f\x98\x80\"}"'
+          accepts_vendor "128 nested objects" '{ printf "%128s" "" | sed "s/ /{\"a\":/g"; printf 1; printf "%128s" "" | tr " " "}"; } >phala_pins.json' '{ printf "%128s" "" | sed "s/ /{\"a\":/g"; printf 1; printf "%128s" "" | tr " " "}"; }'
+          accepts_vendor "127 arrays nested in an object" '{ printf "{\"a\":"; printf "%127s" "" | tr " " "["; printf "%127s" "" | tr " " "]"; printf "}"; } >phala_pins.json' '{ printf "{\"a\":"; printf "%127s" "" | tr " " "["; printf "%127s" "" | tr " " "]"; printf "}"; }'
+
+          # The revocation guard reads every version of enclave_pins.json on the first-parent history
+          # of the signed commit. Each argument is one commit's pins, the fixture through a jq filter,
+          # oldest first.
+          history() {
+            local dir change file
+            dir=$(mktemp -d)
+            mkdir "$dir/repo"
+            for file in $vendor_files; do
+              cp "$vendors/$file" "$dir/repo/"
+            done
+            for change in "$@"; do
+              jq "$change" "$fixture" >"$dir/repo/enclave_pins.json"
+              commit "$dir/repo" "$change"
+            done
+            echo "$dir"
+          }
+          guard() {
+            local want=$1 why=$2 dir err
+            shift 2
+            dir=$(history "$@")
+            if err=$(statements "$dir" 101 2026-11-03T04:17:00Z 2>&1 >/dev/null); then
+              [ "$want" = signs ] || { echo "FAIL: signed when $why"; failed=1; }
+            elif [ "$want" = signs ]; then
+              echo "FAIL: refused when $why: $err"; failed=1
+            elif [[ $err != *"$want"* ]]; then
+              echo "FAIL: when $why, the step did not say \"$want\" but: $err"; failed=1
+            fi
+          }
+          revoke='(.[] | select(.pcr0 == ("c" * 96)) | .revoked) = true'
+          drop='map(select(.pcr0 != ("c" * 96)))'
+          again="unrevoked, and an earlier version revoked it"
+          guard "$again" "a revoked prod image is listed unrevoked again" . "$revoke" .
+          guard "$again" "a revoked prod image is dropped and listed again unrevoked" "$revoke" "$drop" .
+          guard "$again" "an image revoked two versions back is listed unrevoked" "$revoke" "$revoke | .[1].built_at = \"2026-01-03T00:00:00Z\"" .
+          guard "$again" "an image revoked in the first version comes back" "$revoke" . .
+          guard "is not a list" "an earlier version is not a list" '{}' .
+          guard signs "a revoked image stays revoked" . "$revoke" "$revoke"
+          guard signs "an image is revoked for good and dropped" . "$revoke" "$drop"
+          guard signs "a revoked dev image's PCRs are listed unrevoked as prod" \
+            '(.[] | select(.environment == "dev") | .revoked) = true' \
+            '(.[] | select(.environment == "dev") | .revoked) = true | . + [.[] | select(.environment == "dev") | .environment = "prod" | .revoked = false]'
+          dir=$(mktemp -d)
+          if ! (RUNNER_TEMP=$dir VENDOR_FILES=$vendor_files SEQUENCE=101 COMMIT=$(git rev-parse HEAD) TIME=2026-11-03T04:17:00Z bash --noprofile --norc -eo pipefail "$step" >/dev/null); then
+            echo "FAIL: refused the history of this repository's enclave_pins.json"; failed=1
+          fi
+          exit $failed
+
+  sign-attempt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          failed=0
+          step=$RUNNER_TEMP/attempt.sh
+          yq -e '.jobs.sign.steps[] | select(.id == "attempt") | .run' .github/workflows/sign.yml >"$step"
+          if [ "$(yq '.jobs.sign.steps[0].id' .github/workflows/sign.yml)" != attempt ]; then
+            echo "FAIL: attempt is not sign's first step"; failed=1
+          fi
+          attempt() { env GITHUB_RUN_ATTEMPT="$1" GITHUB_RUN_ID=7 bash --noprofile --norc -eo pipefail "$step" >/dev/null 2>&1; }
+          if ! attempt 1; then
+            echo "FAIL: refused a first attempt"; failed=1
+          fi
+          for refused in 2 3 10 01 ""; do
+            if attempt "$refused"; then
+              echo "FAIL: ran attempt '$refused'"; failed=1
+            fi
+          done
+          exit $failed
+
+  sign-newest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          failed=0
+          statements=$RUNNER_TEMP/statements.sh
+          newest=$RUNNER_TEMP/newest.sh
+          yq -e '.jobs.sign.steps[] | select(.id == "statements") | .run' .github/workflows/sign.yml >"$statements"
+          yq -e '.jobs.sign.steps[] | select(.id == "newest") | .run' .github/workflows/sign.yml >"$newest"
+          identity=$(yq -e '.jobs.sign.env.IDENTITY' .github/workflows/sign.yml)
+          issuer=$(yq -e '.jobs.sign.env.ISSUER' .github/workflows/sign.yml)
+          fresh=$(yq -e '.jobs.sign.steps[] | select(.id == "newest") | .env.FRESH' .github/workflows/sign.yml)
+          vendor_files=$(yq -e '.jobs.sign.env.VENDOR_FILES' .github/workflows/sign.yml)
+          branch=$(yq -e '.jobs.sign.env.STATEMENTS_BRANCH' .github/workflows/sign.yml)
+          export GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.com GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@example.com
+          work=$RUNNER_TEMP/newest
+          ours=$work/ours
+          tree=$work/tree
+          mkdir -p "$work/certs" "$ours/repo"
+
+          # The step runs in ours/repo, a checkout of the real pins whose origin is a bare repository
+          # that holds the statements branch each case writes.
+          read -ra vendor <<<"$vendor_files"
+          cp enclave_pins.json "${vendor[@]}" "$ours/repo/"
+          git -c init.defaultBranch=main init -q "$ours/repo"
+          git -C "$ours/repo" add -A
+          git -C "$ours/repo" commit -qm pins
+          git init -q --bare "$work/origin.git"
+          git -C "$ours/repo" remote add origin "$work/origin.git"
+          (cd "$ours/repo" && RUNNER_TEMP=$ours VENDOR_FILES=$vendor_files SEQUENCE=300 COMMIT="$(git rev-parse HEAD)" TIME=2026-11-04T05:43:00Z bash --noprofile --norc -eo pipefail "$statements")
+
+          cat >"$ours/cosign" <<'COSIGN'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          [ $# -eq 11 ] && [ "$1 $2 $4 $5 $7 $9" = "verify-blob --bundle --use-signed-timestamps --certificate-identity --certificate-oidc-issuer --certificate-github-workflow-sha" ]
+          [ "$6" = "$WANT_IDENTITY" ] && [ "$8" = "$WANT_ISSUER" ]
+          [ "${10}" = "$(jq -r .pins_commit "${11}")" ]
+          [ "$(jq -r .test_signs "$3")" = "$(sha256sum "${11}" | cut -d' ' -f1)" ]
+          COSIGN
+          chmod +x "$ours/cosign"
+
+          # Writes certs/$1.der, a certificate of run attempt $2 issued at Unix time $3.
+          cert() {
+            local dir
+            dir=$(mktemp -d)
+            : >"$dir/index.txt"
+            echo 01 >"$dir/serial"
+            printf '[ca]\ndefault_ca = d\n[d]\ndatabase = %s/index.txt\nnew_certs_dir = %s\nserial = %s/serial\ndefault_md = sha256\npolicy = p\nunique_subject = no\n[p]\ncommonName = supplied\n[e]\n1.3.6.1.4.1.57264.1.21 = ASN1:UTF8String:https://github.com/trymorse/morse-pins/actions/runs/41809736075/attempts/%s\n' \
+              "$dir" "$dir" "$dir" "$2" >"$dir/ca.cnf"
+            openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$dir/key.pem" -subj /CN=check -out "$dir/req.pem" 2>/dev/null
+            openssl ca -batch -selfsign -config "$dir/ca.cnf" -keyfile "$dir/key.pem" -in "$dir/req.pem" -extensions e -notext -outdir "$dir" -out "$dir/cert.pem" \
+              -startdate "$(date -u -d "@$3" +%Y%m%d%H%M%SZ)" -enddate "$(date -u -d "@$(($3 + 600))" +%Y%m%d%H%M%SZ)" 2>/dev/null
+            openssl x509 -in "$dir/cert.pem" -outform DER -out "$work/certs/$1.der"
+          }
+          now=$(date -u +%s)
+          cert hour 1 $((now - 3600))
+          cert second 2 $((now - 3600))
+          cert young 1 $((now - fresh + 120))
+          cert day 1 $((now - fresh))
+          cert stale 1 $((now - 90000))
+          cert future 1 $((now + 600))
+
+          # Adds statement $1, its statement changed by jq filter $2 and signed with certificate $3
+          # and log entries $4, at sequence $5, to the branch tree, and prints its index entry.
+          put() {
+            local name=$1 change=$2 cert=$3 entries=${4:-'[{}]'} sequence=${5:-201} base
+            base=$name/$sequence-20261104T044300Z
+            mkdir -p "$tree/$name"
+            jq -jcS "$change" "$ours/signed/$name.statement.json" >"$tree/$base.statement.json"
+            jq -n --arg cert "$(base64 -w0 <"$work/certs/$cert.der")" --argjson entries "$entries" --arg signs "$(sha256sum "$tree/$base.statement.json" | cut -d' ' -f1)" \
+              '{verificationMaterial: {certificate: {rawBytes: $cert}, tlogEntries: $entries}, test_signs: $signs}' >"$tree/$base.sigstore.json"
+            jq -n --arg base "$base" --argjson sequence "$sequence" '{sequence: $sequence, time: "2026-11-04T04:43:00Z", statement: "\($base).statement.json", bundle: "\($base).sigstore.json"}'
+          }
+          # Writes $1/index.json from the entries on stdin, in their order.
+          index() { mkdir -p "$tree/$1" && jq -s . >"$tree/$1/index.json"; }
+          # Replaces origin's statements branch with the tree, and starts the next tree empty.
+          publish() {
+            git -c init.defaultBranch=main init -q "$tree"
+            git -C "$tree" add -A
+            git -C "$tree" commit -q --allow-empty -m statements
+            git -C "$tree" push -qf "$work/origin.git" "HEAD:refs/heads/$branch"
+            rm -rf "$tree"
+          }
+          check() {
+            rm -f "$work/output"
+            (cd "$ours/repo" && env FRESH="$fresh" WANT_IDENTITY="$identity" WANT_ISSUER="$issuer" IDENTITY="$identity" ISSUER="$issuer" \
+              RUNNER_TEMP="$ours" GITHUB_OUTPUT="$work/output" STATEMENTS_BRANCH="$branch" \
+              bash --noprofile --norc -eo pipefail "$newest" >/dev/null 2>&1)
+          }
+          skips() {
+            if ! check; then
+              echo "FAIL: the step failed when $1"; failed=1
+            elif ! grep -qx current=true "$work/output" 2>/dev/null; then
+              echo "FAIL: signed again when $1"; failed=1
+            fi
+          }
+          signs() {
+            if ! check; then
+              echo "FAIL: the step failed when $1"; failed=1
+            elif [ -s "$work/output" ]; then
+              echo "FAIL: committed nothing when $1"; failed=1
+            fi
+          }
+          same='.sequence = 201 | .time = "2026-11-04T04:43:00Z" | .pins_commit = ("a" * 40)'
+          # Publishes one statement of each name, each changed by its filter or signed by its certificate.
+          branch_of() {
+            put dev "${1:-$same}" "${4:-hour}" | index dev
+            put prod "${2:-$same}" "${5:-hour}" | index prod
+            put vendor "${3:-$same}" "${6:-hour}" | index vendor
+            publish
+          }
+
+          signs "the branch does not exist"
+          branch_of
+          skips "the newest statements sign the same images and vendor files an hour ago at another sequence, time and commit"
+          branch_of "" "" "" young young young
+          skips "the newest statements were signed just under FRESH seconds ago"
+          { put prod "$same" hour '[{}]' 202; put prod "$same | .images[0].revoked |= not" hour '[{}]' 201; } | index prod
+          put dev "$same" hour | index dev
+          put vendor "$same" hour | index vendor
+          publish
+          skips "the newest prod statement is the same and an older one differs"
+          { put prod "$same | .images[0].revoked |= not" hour '[{}]' 202; put prod "$same" hour '[{}]' 201; } | index prod
+          put dev "$same" hour | index dev
+          put vendor "$same" hour | index vendor
+          publish
+          signs "the newest prod statement differs and an older one is the same"
+
+          changed() { branch_of "$2" "$3" "${4:-}"; signs "$1"; }
+          changed "a prod image's revoked differs" "$same" "$same | .images[0].revoked |= not"
+          changed "a dev image's revoked differs" "$same | .images[0].revoked |= not" "$same"
+          changed "the newest lists an extra prod image" "$same" "$same | .images += [.images[0] | .pcr0 = (\"f\" * 96)]"
+          changed "the newest lacks a prod image" "$same" "$same | .images |= .[1:]"
+          changed "the newest has another type" "$same" "$same | .type = \"morse-enclave-pins-v2\""
+          changed "the newest is for another environment" "$same" "$same | .environment = \"dev\""
+          changed "the newest's pins_commit is not a commit" "$same" "$same | .pins_commit = \"main\""
+          changed "a vendor file's hash differs" "$same" "$same" "$same | .files[\"v4/phala_pins.json\"] = (\"f\" * 64)"
+          changed "the newest lacks a vendor file" "$same" "$same" "$same | del(.files[\"v4/tinfoil_pins.json\"])"
+          changed "the newest hashes an extra vendor file" "$same" "$same" "$same | .files[\"v4/other_pins.json\"] = (\"f\" * 64)"
+          changed "the newest's vendor statement has another type" "$same" "$same" "$same | .type = \"morse-vendor-pins-v2\""
+
+          branch_of "" "" "" hour second hour
+          signs "the newest prod statement was signed by a second attempt"
+          branch_of "" "" "" hour hour second
+          signs "the newest vendor statement was signed by a second attempt"
+          for cert in day stale future; do
+            branch_of "" "" "" "$cert" "$cert" "$cert"
+            signs "the newest statements' certificates are $cert"
+          done
+          put dev "$same" hour | index dev
+          put prod "$same" hour '[{}, {}]' | index prod
+          put vendor "$same" hour | index vendor
+          publish
+          signs "the newest prod bundle has two log entries"
+          put dev "$same" hour | index dev
+          put prod "$same" hour '[]' | index prod
+          put vendor "$same" hour | index vendor
+          publish
+          signs "the newest prod bundle has no log entry"
+          put dev "$same" hour | index dev
+          put prod "$same" hour | index prod
+          put vendor "$same" hour | index vendor
+          jq '.test_signs = "0"' "$tree/prod/201-20261104T044300Z.sigstore.json" >"$work/x" && mv "$work/x" "$tree/prod/201-20261104T044300Z.sigstore.json"
+          publish
+          signs "the newest prod signature does not verify"
+          put prod "$same" hour | index prod
+          put vendor "$same" hour | index vendor
+          publish
+          signs "the branch has no dev index"
+          put dev "$same" hour | index dev
+          put prod "$same" hour | index prod
+          publish
+          signs "the branch has no vendor index"
+
+          # Writes the dev and vendor statements as the newest does, and prod's index.json as $1.
+          prod_index() {
+            put dev "$same" hour | index dev
+            put vendor "$same" hour | index vendor
+            put prod "$same" hour >/dev/null
+            printf '%s' "$1" >"$tree/prod/index.json"
+            publish
+          }
+          entry='{"sequence": 201, "time": "2026-11-04T04:43:00Z", "statement": "prod/201-20261104T044300Z.statement.json", "bundle": "prod/201-20261104T044300Z.sigstore.json"}'
+          prod_index "[$entry]"
+          skips "prod's index names its newest statement"
+          prod_index '[]'
+          signs "prod's index is empty"
+          prod_index '{}'
+          signs "prod's index is an object"
+          prod_index '[null]'
+          signs "prod's index lists null"
+          prod_index "[$entry"
+          signs "prod's index is not JSON"
+          prod_index "[$(jq -c '.statement = "dev/201-20261104T044300Z.statement.json" | .bundle = "dev/201-20261104T044300Z.sigstore.json"' <<<"$entry")]"
+          signs "prod's index names dev's statement"
+          prod_index "[$(jq -c '.statement = "prod/../dev/201-20261104T044300Z.statement.json"' <<<"$entry")]"
+          signs "prod's index names a path out of prod"
+          prod_index "[$(jq -c '.bundle = "prod/202-20261104T044300Z.sigstore.json"' <<<"$entry")]"
+          signs "prod's index names another statement's bundle"
+          prod_index "[$(jq -c '.statement = "prod/202-20261104T044300Z.statement.json" | .bundle = "prod/202-20261104T044300Z.sigstore.json"' <<<"$entry")]"
+          signs "prod's index names a statement the branch does not hold"
+          exit $failed
+
+  sign-cosignatures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          yq -e '.jobs.sign.steps[] | select(.id == "enclave") | .run' .github/workflows/sign.yml >"$RUNNER_TEMP/enclave.sh"
+          ENCLAVE_REPO=$(yq -e '.jobs.sign.env.ENCLAVE_REPO' .github/workflows/sign.yml) ENCLAVE_COMMIT=$(yq -e '.jobs.sign.env.ENCLAVE_COMMIT' .github/workflows/sign.yml) \
+            bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/enclave.sh"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ runner.temp }}/enclave/go.mod
+          cache: false
+      - env:
+          GOTOOLCHAIN: local
+          GOFLAGS: -mod=readonly
+        run: |
+          set -euo pipefail
+          failed=0
+          sign_yml=.github/workflows/sign.yml
+          witnesses=$(yq -e '.jobs.sign.env.WITNESSES' "$sign_yml")
+          identity=$(yq -e '.jobs.sign.env.IDENTITY' "$sign_yml")
+          issuer=$(yq -e '.jobs.sign.env.ISSUER' "$sign_yml")
+          config=$(yq -e '.jobs.sign.env.SIGNING_CONFIG' "$sign_yml")
+          tries=$(yq -e '.jobs.sign.steps[] | select(.id == "sign") | .env.TRIES' "$sign_yml")
+          yq -e '.jobs.sign.steps[] | select(.id == "cosignatures") | .run' "$sign_yml" >"$RUNNER_TEMP/build.sh"
+          yq -e '.jobs.sign.steps[] | select(.id == "sign") | .run' "$sign_yml" >"$RUNNER_TEMP/sign.sh"
+          ENCLAVE_REPO=$(yq -e '.jobs.sign.env.ENCLAVE_REPO' "$sign_yml") ENCLAVE_COMMIT=$(yq -e '.jobs.sign.env.ENCLAVE_COMMIT' "$sign_yml") \
+            bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/build.sh"
+          checker=$RUNNER_TEMP/cosignatures
+          enclave=$RUNNER_TEMP/enclave
+
+          if [ "$tries" != 3 ]; then
+            echo "FAIL: a statement is signed up to $tries times, not 3"; failed=1
+          fi
+          # A short count fails the sign step, and nothing after it commits.
+          order=$(yq '[.jobs.sign.steps[] | select(has("id")) | .id] | join(" ")' "$sign_yml")
+          if [ "$order" != "attempt head statements newest enclave cosignatures sign commit" ]; then
+            echo "FAIL: sign's steps are $order"; failed=1
+          fi
+          if [ "$(yq '.jobs.sign.steps[] | select(.id == "commit") | .if' "$sign_yml")" != "steps.newest.outputs.current != 'true'" ] ||
+            [ "$(yq '[.jobs.sign.steps[] | select(has("continue-on-error"))] | length' "$sign_yml")" != 0 ]; then
+            echo "FAIL: the commit step can run after the sign step fails"; failed=1
+          fi
+
+          mkdir "$enclave/cmd/forge"
+          cat >"$enclave/cmd/forge/main.go" <<'EOF'
+          // Command forge makes cosignature/v1 witness keys and signatures for the
+          // cosignatures tests. Each key's seed is the sha256 of its name and a label,
+          // so a test names a key rather than storing one.
+          //
+          //	forge vkey <name> <label>          prints the verifier key
+          //	forge cosign <name> <label> <time> appends a signature line to the note on stdin
+          package main
+
+          import (
+          	"crypto/ed25519"
+          	"crypto/sha256"
+          	"encoding/base64"
+          	"encoding/binary"
+          	"encoding/hex"
+          	"fmt"
+          	"io"
+          	"os"
+          	"strconv"
+          	"strings"
+          )
+
+          func key(name, label string) ed25519.PrivateKey {
+          	seed := sha256.Sum256([]byte("forge " + name + " " + label))
+          	return ed25519.NewKeyFromSeed(seed[:])
+          }
+
+          func keyHash(name string, pub ed25519.PublicKey) []byte {
+          	h := sha256.Sum256(append([]byte(name+"\n\x04"), pub...))
+          	return h[:4]
+          }
+
+          func main() {
+          	switch {
+          	case len(os.Args) == 4 && os.Args[1] == "vkey":
+          		name := os.Args[2]
+          		pub := key(name, os.Args[3]).Public().(ed25519.PublicKey)
+          		fmt.Printf("%s+%s+%s\n", name, hex.EncodeToString(keyHash(name, pub)), base64.StdEncoding.EncodeToString(append([]byte{4}, pub...)))
+          	case len(os.Args) == 5 && os.Args[1] == "cosign":
+          		name := os.Args[2]
+          		priv := key(name, os.Args[3])
+          		seconds, err := strconv.ParseUint(os.Args[4], 10, 64)
+          		if err != nil {
+          			fail(err)
+          		}
+          		note, err := io.ReadAll(os.Stdin)
+          		if err != nil {
+          			fail(err)
+          		}
+          		split := strings.LastIndex(string(note), "\n\n")
+          		if split < 0 {
+          			fail(fmt.Errorf("the note has no signature block"))
+          		}
+          		text := note[:split+1]
+          		msg := append([]byte("cosignature/v1\ntime "+strconv.FormatUint(seconds, 10)+"\n"), text...)
+          		sig := binary.BigEndian.AppendUint64(nil, seconds)
+          		sig = append(sig, ed25519.Sign(priv, msg)...)
+          		line := append(keyHash(name, priv.Public().(ed25519.PublicKey)), sig...)
+          		fmt.Printf("%s— %s %s\n", note, name, base64.StdEncoding.EncodeToString(line))
+          	default:
+          		fail(fmt.Errorf("usage: forge vkey <name> <label> | forge cosign <name> <label> <time>"))
+          	}
+          }
+
+          func fail(err error) {
+          	fmt.Fprintln(os.Stderr, "forge:", err)
+          	os.Exit(1)
+          }
+          EOF
+          go -C "$enclave" build -o "$RUNNER_TEMP/forge" ./cmd/forge
+          forge=$RUNNER_TEMP/forge
+
+          # The helper's policy from WITNESSES is the policy door.Production trusts, keys and k alike.
+          cat >"$enclave/cmd/morse-pins-cosignatures/policy_test.go" <<'EOF'
+          package main
+
+          import (
+          	"os"
+          	"reflect"
+          	"testing"
+
+          	"morse/backend/internal/door"
+          )
+
+          func TestPolicyIsTrust(t *testing.T) {
+          	trust, err := door.Production()
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	p, err := policy(os.Getenv("WITNESSES"))
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if !reflect.DeepEqual(trust.Witnesses, p) {
+          		t.Fatalf("WITNESSES with k = %d is not door.Production's witness policy", k)
+          	}
+          }
+          EOF
+          if ! WITNESSES=$witnesses go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >"$RUNNER_TEMP/out" 2>&1; then
+            echo "FAIL: WITNESSES is not the witness policy of internal/door/trust.go:"; cat "$RUNNER_TEMP/out"; failed=1
+          fi
+          if WITNESSES=$(sed 1d <<<"$witnesses") go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >/dev/null 2>&1; then
+            echo "FAIL: the policy check passed WITNESSES without its first witness"; failed=1
+          fi
+          if WITNESSES=$(printf '%s IPng Networks\n' "$("$forge" vkey krabbel.ct.ipng.ch swapped)"; sed 1d <<<"$witnesses") go -C "$enclave" test -count=1 ./cmd/morse-pins-cosignatures >/dev/null 2>&1; then
+            echo "FAIL: the policy check passed WITNESSES with a forged key for krabbel.ct.ipng.ch"; failed=1
+          fi
+
+          # Sigstore's TUF set as fetched on 2026-11-10, served in the layout of its repository.
+          python3 -m http.server --bind 127.0.0.1 --directory .github/testdata/tuf 8721 >"$RUNNER_TEMP/http.log" 2>&1 &
+          servers=$!
+          tampered=$RUNNER_TEMP/tampered
+          cp -R .github/testdata/tuf "$tampered"
+          printf ' ' >>"$(echo "$tampered"/targets/*.trusted_root.json)"
+          python3 -m http.server --bind 127.0.0.1 --directory "$tampered" 8722 >"$RUNNER_TEMP/http-tampered.log" 2>&1 &
+          servers="$servers $!"
+          trap 'kill $servers 2>/dev/null || true' EXIT
+          for port in 8721 8722; do
+            for _ in $(seq 50); do curl -fsS -o /dev/null "http://127.0.0.1:$port/timestamp.json" 2>/dev/null && break; sleep 0.2; done
+          done
+          tuf=$RUNNER_TEMP/tuf.json
+          if ! "$checker" tuf http://127.0.0.1:8721 >"$tuf"; then
+            echo "FAIL: the TUF set was not read"; failed=1
+          elif ! jq -r .trusted_root "$tuf" | base64 -d | cmp - .github/testdata/tuf/targets/*.trusted_root.json; then
+            echo "FAIL: the TUF set's trusted root is not the served one"; failed=1
+          fi
+          if "$checker" tuf http://127.0.0.1:8722 >/dev/null 2>&1; then
+            echo "FAIL: read a TUF set whose trusted root is not the one targets.json hashes"; failed=1
+          fi
+
+          # A Rekor v2 201 body logged to log2025-1 on 2026-11-05 by backend's rekorv2 recorder,
+          # cosigned by all four witnesses, and the certificate, digest and signature it logged.
+          rekor=.github/testdata/rekor-v2
+          note=$RUNNER_TEMP/note
+          jq -j '.inclusionProof.checkpoint.envelope' "$rekor/entry.json" >"$note"
+          not_after=$(date -u -d "$(jq -r .certificate "$rekor/post.json" | base64 -d | openssl x509 -inform DER -noout -enddate | cut -d= -f2)" +%s)
+          signed_at=$(($(date -u -d "$(jq -r .posted_at "$rekor/post.json")" +%s) + 1))
+          # Prints the recorded note without the signature lines of the names given.
+          without() {
+            local text
+            text=$(cat "$note")
+            for name in "$@"; do
+              text=$(grep -vF -- "— $name " <<<"$text")
+            done
+            printf '%s\n' "$text"
+          }
+          # Prints a bundle around the recorded entry with the note in $1, the entry changed by jq
+          # filter $2 and the bundle by $3.
+          bundle() {
+            jq -n --slurpfile entry "$rekor/entry.json" --slurpfile post "$rekor/post.json" --rawfile note "$1" "
+              {mediaType: \"application/vnd.dev.sigstore.bundle.v0.3+json\",
+               verificationMaterial: {certificate: {rawBytes: \$post[0].certificate},
+                 tlogEntries: [\$entry[0] | .inclusionProof.checkpoint.envelope = \$note | ${2:-.}]},
+               messageSignature: {messageDigest: {algorithm: \"SHA2_256\", digest: \$post[0].digest}, signature: \$post[0].signature}}
+              | ${3:-.}"
+          }
+          # Checks the count of the bundle around note $3 exits $2, with witnesses $4 and filters $5 and $6.
+          counts() {
+            local why=$1 want=$2 got=0
+            bundle "$3" "${5:-.}" "${6:-.}" >"$RUNNER_TEMP/bundle.json"
+            WITNESSES=${4:-$witnesses} "$checker" count "$tuf" "$RUNNER_TEMP/bundle.json" >"$RUNNER_TEMP/out" 2>&1 || got=$?
+            if [ "$got" != "$want" ]; then
+              echo "FAIL: $why exits $got, not $want:"; cat "$RUNNER_TEMP/out"; failed=1
+            fi
+          }
+          with() { printf '%s\n%s %s' "$witnesses" "$("$forge" vkey "$1" "$2")" "$3"; }
+          krabbel=krabbel.ct.ipng.ch
+          bells=staging.witness.transparency.goog/ring-any-bells
+          stagemole=witness.stagemole.eu
+          geomys=witness.navigli.sunlight.geomys.org
+
+          counts "the recorded checkpoint with 4 cosignatures" 0 "$note"
+          counts "the recorded entry without its zero integratedTime and null inclusionPromise, as a bundle writes it" 0 "$note" "" 'del(.integratedTime, .inclusionPromise)'
+          without "$krabbel" >"$RUNNER_TEMP/three"
+          counts "a checkpoint with 3 cosignatures" 0 "$RUNNER_TEMP/three"
+          without "$krabbel" "$stagemole" >"$RUNNER_TEMP/two"
+          counts "a checkpoint with 2 cosignatures" 2 "$RUNNER_TEMP/two"
+          without "$krabbel" "$stagemole" "$bells" >"$RUNNER_TEMP/one"
+          counts "a checkpoint with 1 cosignature" 2 "$RUNNER_TEMP/one"
+          without "$krabbel" "$stagemole" "$bells" "$geomys" >"$RUNNER_TEMP/none"
+          counts "a checkpoint with no cosignature" 2 "$RUNNER_TEMP/none"
+
+          "$forge" cosign witness.outside.example a "$signed_at" <"$RUNNER_TEMP/two" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, one under a key outside trust.go" 2 "$RUNNER_TEMP/n"
+          "$forge" cosign "$krabbel" outside "$signed_at" <"$RUNNER_TEMP/two" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, one by a listed name under a key outside trust.go" 2 "$RUNNER_TEMP/n"
+          "$forge" cosign witness.outside.example a "$signed_at" <"$RUNNER_TEMP/three" >"$RUNNER_TEMP/n"
+          counts "4 cosignatures, 3 under keys of trust.go" 0 "$RUNNER_TEMP/n"
+          rotated=$(with "$krabbel" rotated "IPng Networks")
+          without "$stagemole" "$bells" | "$forge" cosign "$krabbel" rotated "$signed_at" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, two by one witness name under two of its keys" 2 "$RUNNER_TEMP/n" "$rotated"
+          without "$bells" | "$forge" cosign "$krabbel" rotated "$signed_at" >"$RUNNER_TEMP/n"
+          counts "4 cosignatures, two by one witness name" 0 "$RUNNER_TEMP/n" "$rotated"
+          second=$(with witness.second.geomys.example a Geomys)
+          "$forge" cosign witness.second.geomys.example a "$signed_at" <"$RUNNER_TEMP/two" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, two by one operator" 2 "$RUNNER_TEMP/n" "$second"
+          "$forge" cosign witness.second.geomys.example a "$signed_at" <"$RUNNER_TEMP/three" >"$RUNNER_TEMP/n"
+          counts "4 cosignatures, two by one operator" 0 "$RUNNER_TEMP/n" "$second"
+          late=$(with witness.late.example a "Late Operator")
+          "$forge" cosign witness.late.example a $((not_after + 1)) <"$RUNNER_TEMP/two" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, one a second after the certificate's NotAfter" 2 "$RUNNER_TEMP/n" "$late"
+          "$forge" cosign witness.late.example a "$not_after" <"$RUNNER_TEMP/two" >"$RUNNER_TEMP/n"
+          counts "3 cosignatures, one at the certificate's NotAfter" 0 "$RUNNER_TEMP/n" "$late"
+          "$forge" cosign witness.late.example a $((not_after + 1)) <"$RUNNER_TEMP/three" >"$RUNNER_TEMP/n"
+          counts "4 cosignatures, one after the certificate's NotAfter" 0 "$RUNNER_TEMP/n" "$late"
+          python3 -I -c '
+          import base64, sys
+          lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+          for i, line in enumerate(lines):
+              if line.startswith("— " + sys.argv[2] + " "):
+                  name, sig = line.rsplit(" ", 1)
+                  raw = bytearray(base64.b64decode(sig))
+                  raw[-1] ^= 1
+                  lines[i] = name + " " + base64.b64encode(raw).decode()
+          open(sys.argv[3], "w", encoding="utf-8").write("\n".join(lines))
+          ' "$RUNNER_TEMP/three" "$geomys" "$RUNNER_TEMP/n"
+          counts "3 cosignatures, one whose signature does not verify" 2 "$RUNNER_TEMP/n"
+
+          counts "a bundle with two log entries" 1 "$note" "" '.verificationMaterial.tlogEntries += .verificationMaterial.tlogEntries'
+          counts "a Rekor v1 entry" 1 "$note" '.kindVersion.version = "0.0.1"'
+          counts "an inclusion proof that does not reach its root" 1 "$note" '.inclusionProof.hashes[0] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="'
+          without log2025-1.rekor.sigstore.dev >"$RUNNER_TEMP/n"
+          counts "a checkpoint the shard did not sign" 1 "$RUNNER_TEMP/n"
+          counts "a bundle whose signature is not the logged one" 1 "$note" "" '.messageSignature.signature = "AAAA"'
+          counts "a bundle whose digest is not the logged one" 1 "$note" "" '.messageSignature.messageDigest.digest = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="'
+          counts "a bundle of another media type" 1 "$note" "" '.mediaType = "application/vnd.dev.sigstore.bundle.v0.2+json"'
+          counts "a witness list with a malformed key" 1 "$note" "$(printf '%s\nwitness.example+00000000+AAAA Example' "$witnesses")"
+
+          # The sign step signs each statement up to TRIES times, while the count is short. The fake
+          # cosign answers each sign-blob with the next recorded bundle of the case.
+          run=$RUNNER_TEMP/run
+          mkdir -p "$run/signed" "$RUNNER_TEMP/answers"
+          cp "$checker" "$run/cosignatures"
+          for name in dev prod vendor; do
+            printf '{"%s":1}' "$name" >"$run/signed/$name.statement.json"
+          done
+          bundle "$note" >"$RUNNER_TEMP/answers/4.json"
+          bundle "$RUNNER_TEMP/three" >"$RUNNER_TEMP/answers/3.json"
+          bundle "$RUNNER_TEMP/two" >"$RUNNER_TEMP/answers/2.json"
+          bundle "$note" '.inclusionProof.hashes[0] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' >"$RUNNER_TEMP/answers/bad.json"
+          cat >"$run/cosign" <<'COSIGN'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case $1 in
+            sign-blob)
+              [ $# -eq 7 ] && [ "$2 $3 $5" = "--yes --signing-config --bundle" ] && [ "$4" = "$WANT_CONFIG" ] && [ -s "$7" ]
+              n=$(($(cat "$CASE/calls" 2>/dev/null || echo 0) + 1))
+              echo "$n" >"$CASE/calls"
+              cp "$CASE/$n.json" "$6"
+              echo "$(basename "$7" .statement.json) $n" >>"$CASE/signed"
+              ;;
+            verify-blob)
+              [ $# -eq 11 ] && [ "$2 $4 $5 $7 $9" = "--bundle --use-signed-timestamps --certificate-identity --certificate-oidc-issuer --certificate-github-workflow-sha" ]
+              [ "$6" = "$WANT_IDENTITY" ] && [ "$8" = "$WANT_ISSUER" ] && [ "${10}" = "$WANT_COMMIT" ] && [ -s "$3" ] && [ -s "${11}" ]
+              ;;
+            *) exit 1 ;;
+          esac
+          COSIGN
+          chmod +x "$run/cosign"
+          commit=$(printf 'b%.0s' {1..40})
+          # Checks the sign step exits $2 after $3 signatures when cosign answers with the bundles named
+          # after them, and that each bundle it leaves is the last answer for its statement.
+          signs() {
+            local why=$1 want=$2 calls=$3 case got=0 n=0 answer name
+            shift 3
+            case=$(mktemp -d)
+            for answer in "$@"; do
+              n=$((n + 1))
+              cp "$RUNNER_TEMP/answers/$answer.json" "$case/$n.json"
+            done
+            rm -f "$run"/signed/*.sigstore.json
+            env RUNNER_TEMP="$run" TUF_URL="${TUF_URL:-http://127.0.0.1:8721}" TRIES="$tries" SIGNING_CONFIG="$config" IDENTITY="$identity" ISSUER="$issuer" COMMIT="$commit" WITNESSES="$witnesses" \
+              CASE="$case" WANT_CONFIG="$config" WANT_IDENTITY="$identity" WANT_ISSUER="$issuer" WANT_COMMIT="$commit" \
+              bash --noprofile --norc -eo pipefail "$RUNNER_TEMP/sign.sh" >"$case/out" 2>&1 || got=$?
+            if [ "$got" != "$want" ]; then
+              echo "FAIL: the sign step exits $got, not $want, when $why:"; cat "$case/out"; failed=1
+            fi
+            if [ "$(cat "$case/calls" 2>/dev/null || echo 0)" != "$calls" ]; then
+              echo "FAIL: the sign step signed $(cat "$case/calls" 2>/dev/null || echo 0) times, not $calls, when $why"; failed=1
+            fi
+            if [ "$want" = 0 ]; then
+              for name in dev prod vendor; do
+                n=$(awk -v name="$name" '$1 == name { n = $2 } END { print n }' "$case/signed")
+                if ! cmp -s "$case/$n.json" "$run/signed/$name.sigstore.json"; then
+                  echo "FAIL: the $name bundle left is not its last answer when $why"; failed=1
+                fi
+              done
+            fi
+          }
+          signs "every first signature has 4 cosignatures" 0 3 4 4 4
+          signs "every first signature has 3 cosignatures" 0 3 3 3 3
+          signs "dev's first signature has 2 cosignatures and its second 3" 0 4 2 3 4 4
+          signs "dev is short twice and its third signature has 3 cosignatures" 0 5 2 2 3 4 4
+          signs "prod is short twice and its third signature has 4 cosignatures" 0 5 4 2 2 4 3
+          signs "dev is short three times" 1 3 2 2 2 4 4
+          signs "vendor is short three times" 1 5 4 4 2 2 2
+          signs "dev's bundle does not verify as a Rekor v2 entry" 1 1 bad 4 4
+          TUF_URL=http://127.0.0.1:1 signs "Sigstore's TUF set cannot be read" 1 0
+          exit $failed
+
+  sign-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          failed=0
+          step=$RUNNER_TEMP/commit.sh
+          yq -e '.jobs.sign.steps[] | select(.id == "commit") | .run' .github/workflows/sign.yml >"$step"
+          branch=$(yq -e '.jobs.sign.env.STATEMENTS_BRANCH' .github/workflows/sign.yml)
+          author=$(yq -e '.jobs.sign.steps[] | select(.id == "commit") | .env.GIT_AUTHOR_NAME' .github/workflows/sign.yml)
+          email=$(yq -e '.jobs.sign.steps[] | select(.id == "commit") | .env.GIT_AUTHOR_EMAIL' .github/workflows/sign.yml)
+          work=$RUNNER_TEMP/commit
+          out=$work/out
+          repo=$work/repo
+          mkdir -p "$out" "$repo"
+          git init -q --bare "$work/origin.git"
+          git -c init.defaultBranch=main init -q "$repo"
+          git -C "$repo" -c user.name=check -c user.email=check@example.com commit -q --allow-empty -m pins
+          git -C "$repo" remote add origin "$work/origin.git"
+          commit=$(printf 'c%.0s' {1..40})
+
+          # Leaves the statements and bundles of the names given, as the sign step leaves them.
+          signed() {
+            local name
+            rm -rf "$out/signed"
+            mkdir "$out/signed"
+            for name in "$@"; do
+              printf '{"statement":"%s %s"}' "$name" "$sequence" >"$out/signed/$name.statement.json"
+              printf '{"bundle":"%s %s"}' "$name" "$sequence" >"$out/signed/$name.sigstore.json"
+            done
+          }
+          run() {
+            (cd "$repo" && env RUNNER_TEMP="$out" GH_TOKEN=token SEQUENCE="$1" TIME="$2" COMMIT="$commit" STATEMENTS_BRANCH="$branch" \
+              GIT_AUTHOR_NAME="$author" GIT_AUTHOR_EMAIL="$email" GIT_COMMITTER_NAME="$author" GIT_COMMITTER_EMAIL="$email" \
+              GITHUB_EVENT_NAME=push GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=trymorse/morse-pins GITHUB_RUN_ID=7 \
+              bash --noprofile --norc -eo pipefail "$step" >"$work/log" 2>&1)
+          }
+          tip() { git --git-dir="$work/origin.git" rev-parse -q --verify "refs/heads/$branch" || true; }
+          show() { git --git-dir="$work/origin.git" show "refs/heads/$branch:$1"; }
+          # Checks $1's index lists the statements "<sequence>-<stamp>" given, in order.
+          lists() {
+            local name=$1 want got
+            shift
+            want=$(printf '%s\n' "$@" | jq -Rn --arg name "$name" '[inputs | capture("(?<s>[0-9]+)-(?<t>.*)") | {sequence: (.s | tonumber),
+              time: (.t | "\(.[0:4])-\(.[4:6])-\(.[6:8])T\(.[9:11]):\(.[11:13]):\(.[13:15])Z"),
+              statement: "\($name)/\(.s)-\(.t).statement.json", bundle: "\($name)/\(.s)-\(.t).sigstore.json"}]')
+            got=$(show "$name/index.json" | jq -c .)
+            if [ "$got" != "$(jq -c . <<<"$want")" ]; then
+              echo "FAIL: $name/index.json is $got, not $(jq -c . <<<"$want")"; failed=1
+            fi
+          }
+
+          sequence=241
+          signed dev prod vendor
+          if ! run 241 2026-11-09T20:43:00Z; then
+            echo "FAIL: the first run did not create the branch:"; cat "$work/log"; failed=1
+          fi
+          first=$(tip)
+          if [ -z "$first" ] || [ -n "$(git --git-dir="$work/origin.git" rev-parse -q --verify "$first^" || true)" ]; then
+            echo "FAIL: the first run did not make a root commit"; failed=1
+          fi
+          for name in dev prod vendor; do
+            for suffix in statement.json sigstore.json; do
+              if ! cmp -s <(show "$name/241-20261109T204300Z.$suffix") "$out/signed/$name.$suffix"; then
+                echo "FAIL: $name/241-20261109T204300Z.$suffix is not the signed file"; failed=1
+              fi
+            done
+            lists "$name" 241-20261109T204300Z
+          done
+          if [ "$(git --git-dir="$work/origin.git" ls-tree -r --name-only "refs/heads/$branch" | wc -l)" != 9 ]; then
+            echo "FAIL: the first commit holds other files than three statements, bundles and indexes"; failed=1
+          fi
+          if [ "$(git --git-dir="$work/origin.git" log -1 --format='%an <%ae>' "refs/heads/$branch")" != "$author <$email>" ]; then
+            echo "FAIL: the commit is not by $author"; failed=1
+          fi
+          if ! git --git-dir="$work/origin.git" log -1 --format=%B "refs/heads/$branch" | grep -qF "Signed at $commit by the first attempt of push run https://github.com/trymorse/morse-pins/actions/runs/7."; then
+            echo "FAIL: the commit message does not name the signed commit and the run"; failed=1
+          fi
+
+          sequence=250
+          signed dev prod vendor
+          run 250 2026-11-09T21:43:00Z || { echo "FAIL: the second run failed:"; cat "$work/log"; failed=1; }
+          if [ "$(git --git-dir="$work/origin.git" rev-parse "$(tip)^")" != "$first" ]; then
+            echo "FAIL: the second commit is not on top of the first"; failed=1
+          fi
+          # A late first attempt of an older commit ranks below, and a newer time within one sequence
+          # ranks first.
+          sequence=245
+          signed prod
+          run 245 2026-11-09T22:43:00Z || { echo "FAIL: a run with a lower sequence failed:"; cat "$work/log"; failed=1; }
+          sequence=250
+          signed prod
+          run 250 2026-11-09T21:59:59Z || { echo "FAIL: a run with the same sequence failed:"; cat "$work/log"; failed=1; }
+          lists prod 250-20261109T215959Z 250-20261109T214300Z 245-20261109T224300Z 241-20261109T204300Z
+          lists dev 250-20261109T214300Z 241-20261109T204300Z
+          for sequence in 9 10 260 99 1000 251 252 253; do
+            signed prod
+            run "$sequence" 2026-11-10T00:00:00Z || { echo "FAIL: the run at sequence $sequence failed:"; cat "$work/log"; failed=1; }
+          done
+          lists prod 1000-20261110T000000Z 260-20261110T000000Z 253-20261110T000000Z 252-20261110T000000Z 251-20261110T000000Z \
+            250-20261109T215959Z 250-20261109T214300Z 245-20261109T224300Z 241-20261109T204300Z 99-20261110T000000Z
+          if [ "$(git --git-dir="$work/origin.git" ls-tree --name-only "refs/heads/$branch" prod/ | grep -c '\.statement\.json$')" != 12 ]; then
+            echo "FAIL: the branch does not keep every prod statement"; failed=1
+          fi
+          lists dev 250-20261109T214300Z 241-20261109T204300Z
+
+          before=$(tip)
+          sequence=1000
+          signed prod
+          if run 1000 2026-11-10T00:00:00Z || [ "$(tip)" != "$before" ]; then
+            echo "FAIL: committed a statement whose path the branch already holds"; failed=1
+          fi
+          sequence=1001
+          signed prod
+          rm "$out/signed/prod.sigstore.json"
+          if run 1001 2026-11-10T00:00:00Z || [ "$(tip)" != "$before" ]; then
+            echo "FAIL: committed a statement with no bundle"; failed=1
+          fi
+          sequence=1001
+          signed prod
+          if run 1001 2026-11-10T01:00 || [ "$(tip)" != "$before" ]; then
+            echo "FAIL: committed with a malformed time"; failed=1
+          fi
+          git -C "$repo" remote set-url origin "$work/missing.git"
+          sequence=1001
+          signed prod
+          if run 1001 2026-11-10T01:00:00Z; then
+            echo "FAIL: committed when origin could not be read"; failed=1
+          elif ! grep -qF "could not be read, so nothing is committed" "$work/log"; then
+            echo "FAIL: an unreadable origin did not say so but: $(cat "$work/log")"; failed=1
+          fi
+          git -C "$repo" remote set-url origin "$work/origin.git"
+          # A statement the branch holds without its bundle stops every commit until it is mended.
+          scratch=$work/scratch
+          git -c init.defaultBranch=main init -q "$scratch"
+          git -C "$scratch" fetch -q "$work/origin.git" "refs/heads/$branch"
+          git -C "$scratch" checkout -q FETCH_HEAD
+          echo '{}' >"$scratch/prod/2000-20261110T000000Z.statement.json"
+          git -C "$scratch" add -A
+          git -C "$scratch" -c user.name=check -c user.email=check@example.com commit -qm "a statement without a bundle"
+          git -C "$scratch" push -q "$work/origin.git" "HEAD:refs/heads/$branch"
+          before=$(tip)
+          sequence=1002
+          signed prod
+          if run 1002 2026-11-10T02:00:00Z || [ "$(tip)" != "$before" ]; then
+            echo "FAIL: indexed a statement that has no bundle"; failed=1
+          fi
+          exit $failed
+
+  # The one required check.
+  check:
+    if: always()
+    needs: [lint, sign-statement, sign-attempt, sign-newest, sign-cosignatures, sign-commit]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          LINT: ${{ needs.lint.result }}
+          SIGN_STATEMENT: ${{ needs.sign-statement.result }}
+          SIGN_ATTEMPT: ${{ needs.sign-attempt.result }}
+          SIGN_NEWEST: ${{ needs.sign-newest.result }}
+          SIGN_COSIGNATURES: ${{ needs.sign-cosignatures.result }}
+          SIGN_COMMIT: ${{ needs.sign-commit.result }}
+        run: test "$LINT" = success && test "$SIGN_STATEMENT" = success && test "$SIGN_ATTEMPT" = success && test "$SIGN_NEWEST" = success && test "$SIGN_COSIGNATURES" = success && test "$SIGN_COMMIT" = success

@@ -43,7 +43,9 @@ jq -r '.files | to_entries[] | "\(.value) \(.key | sub("^v4/"; ""))"' vendor.sta
   done
 ```
 
-The identity is the only one that signs, and the `--certificate-github-workflow-sha` line checks that the statement names the commit it was signed at. The apps also refuse a statement whose `sequence` is below the one they last accepted, and one whose Rekor entry is older than they allow.
+The apps accept only this identity on a release, and the `--certificate-github-workflow-sha` line checks that the statement names the commit it was signed at. The apps also refuse a statement whose `sequence` is below the one they last accepted, and one whose Rekor entry is older than they allow.
+
+A second signer runs in this repository: `https://github.com/trymorse/morse-pins/.github/workflows/sign.yml@refs/heads/main`. It logs to Rekor v2 and commits no release. It commits `<env>/<sequence>-<time>.statement.json`, the matching `.sigstore.json`, and `<env>/index.json` to the `statements/images` branch, for `dev`, `prod` and `vendor`. Its `pins_commit` and `sequence` refer to this repository's `main`. The apps switch to it at morse-server PR 3.
 
 ## Check Morse's enclave
 
