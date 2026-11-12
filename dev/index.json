@@ -1,5 +1,11 @@
 [
   {
+    "sequence": 300,
+    "time": "2026-11-12T09:31:46Z",
+    "statement": "dev/300-20261112T093146Z.statement.json",
+    "bundle": "dev/300-20261112T093146Z.sigstore.json"
+  },
+  {
     "sequence": 299,
     "time": "2026-11-12T06:55:59Z",
     "statement": "dev/299-20261112T065559Z.statement.json",
@@ -52,11 +58,5 @@
     "time": "2026-11-12T02:39:27Z",
     "statement": "dev/291-20261112T023927Z.statement.json",
     "bundle": "dev/291-20261112T023927Z.sigstore.json"
-  },
-  {
-    "sequence": 290,
-    "time": "2026-11-12T02:31:14Z",
-    "statement": "dev/290-20261112T023114Z.statement.json",
-    "bundle": "dev/290-20261112T023114Z.sigstore.json"
   }
 ]
