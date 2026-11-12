@@ -700,5 +700,14 @@
     "pcr2": "49cd70c15186a305d48630cef4fded67c9beca59b3dda5499264786fba24c057b6c0d145fbd84719510276ad9f5490c3",
     "built_at": "2026-11-12T06:52:18Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.15-pins-ce3c065",
+    "environment": "prod",
+    "pcr0": "3b937ba4d5200616a125fd79336cdebb84cb1a3e4a9ce479d63a495a877918a6c1a7bda384ac23702856ab00c424a474",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "ac048fe411db60346311e89b7cc9569f1452c3208fe3abe9649d1b90c71e639bde0a28d3dd36005b967ef37350342a03",
+    "built_at": "2026-11-12T09:36:28Z",
+    "revoked": false
   }
 ]
