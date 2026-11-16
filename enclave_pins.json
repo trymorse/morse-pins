@@ -801,15 +801,6 @@
     "revoked": false
   },
   {
-    "tag": "v2026.11.23-1-g9e8fe5df7",
-    "environment": "dev",
-    "pcr0": "f5da415ca83fa4c2e332c1ec1cdeaee4aa851d7afafa412be59bf95ad9e70eb697208ef3ae9d35a1056301b590df0078",
-    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
-    "pcr2": "a25b1bfe5b989e928b52070fb32d7104dbfcbac7102060eed6722b45749e8ca277dff4825ca10a5c65bd84c4ffae19a9",
-    "built_at": "2026-11-15T23:33:48Z",
-    "revoked": false
-  },
-  {
     "tag": "v2026.11.23-6-g5cb8e06aa",
     "environment": "dev",
     "pcr0": "a43c0714d146cbb8828ec42c670a69fe0ec87a383dc9156a11de6ca7d003486b81ec38a3d79faef1fb2c77f3c785e665",
@@ -843,6 +834,15 @@
     "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
     "pcr2": "066eb6e9b2411ae8d72c036f9ba78a3289876df235737555de475ca06f1e2b23791c0bbf82b7b6b1f469775c25e125fc",
     "built_at": "2026-11-16T02:21:15Z",
+    "revoked": false
+  },
+  {
+    "tag": "v2026.11.23-12-gcaf534c69",
+    "environment": "dev",
+    "pcr0": "c8af4faf927395d25785daa957e3e1bfb573ec6e383da3f397f692f9071c74c42963d1cab4b9b9569f258f2be5be8904",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "b9dd1e6052db25461ffd7a093a439cee95702562d0c886051d722cf8b1e836e50fcad8a3032fb801929f1828ff079702",
+    "built_at": "2026-11-16T03:58:38Z",
     "revoked": false
   }
 ]
