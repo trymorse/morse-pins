@@ -171,6 +171,12 @@
     },
     {
       "image": "vllm/vllm-openai",
+      "digest": "sha256:20fdb089454afbb324efa4110a2c025ff7b27cc1a086e07aa580b18df8ad1ce1",
+      "source": "https://github.com/vllm-project/vllm@62d4bc3c7e33b1b6c906e233e6af2d3506c482ca",
+      "first_seen": "2026-11-17"
+    },
+    {
+      "image": "vllm/vllm-openai",
       "digest": "sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
       "source": "https://github.com/vllm-project/vllm@db9527a46873454610df6dbedf79a36d6bf1a7f6",
       "first_seen": "2026-11-17"
