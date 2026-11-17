@@ -146,6 +146,12 @@
       "first_seen": "2026-10-28"
     },
     {
+      "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:fdf817319f25ec54ce6e84113337117f24f2dbf694b8e519e017bcbed86bc9e6",
+      "source": "https://github.com/Phala-Network/sglang@35f00f8cfaaa56fa3f13edb9e81ae0ae1d4504ed",
+      "first_seen": "2026-11-17"
+    },
+    {
       "image": "grafana/alloy",
       "digest": "sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18",
       "source": "https://github.com/grafana/alloy",
