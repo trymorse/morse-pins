@@ -898,5 +898,14 @@
     "pcr2": "784dac3f52680bc0e2c405a2a101fc03c7b457000b8916a004bf3f9b5b06a9694c01a7afd3487e30f59a63c6b9b6cde4",
     "built_at": "2026-11-17T19:29:43Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.26-routes-e9d8140d9385",
+    "environment": "prod",
+    "pcr0": "12af1bb63291fcc18d1ad86bf6e532d29f44b9ced219f049cf9c2b1f88c14cad09e5079cc12f3321ee6c1dbffe1e5f29",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "fa4f596f1d0b0000039e3b872827695f8b2217e588d05d410d5e24351f659bb77768223fb8c84e9d428480754dbaf6c8",
+    "built_at": "2026-11-17T19:38:32Z",
+    "revoked": false
   }
 ]
