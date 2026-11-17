@@ -871,5 +871,14 @@
     "pcr2": "e77ab8f48f5f42d0ee9efaa198a9f8543ae97fb0be8ed0ee8b05439caef2aa316c09cab6523bc6e32b9396eb33705885",
     "built_at": "2026-11-17T03:42:17Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.24-pins-14d5af0",
+    "environment": "prod",
+    "pcr0": "f8e10a51e9de3fe3f4afb2e31ba8e2a45acf79876301dc44bf65dd0dd010d217de5aea322ce5a3de1b67eaf2a97499c3",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "fbe257ea3036efedf205218859fcd01f4a18d2661961b483fc4e8574ef206b1aa7f830703c9723e9055bfedd70689d7a",
+    "built_at": "2026-11-17T05:34:51Z",
+    "revoked": false
   }
 ]
