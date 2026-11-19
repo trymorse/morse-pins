@@ -85,6 +85,10 @@
       {
         "name": "dstack-0.5.12-3acd8e2f",
         "compose_hash": "3acd8e2f13fcd5f6d7f391d7721f409ba390e1c856190ebd54163ed23b33527e"
+      },
+      {
+        "name": "dstack-0.5.12-53cd435e",
+        "compose_hash": "53cd435edbc129f848ed0ddce301f7f192446fe39683713a38537820bea7e1fb"
       }
     ],
     "images": [
