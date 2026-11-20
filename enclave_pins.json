@@ -1024,5 +1024,14 @@
     "pcr2": "008438a2d9a26330b44d82985b4267f317fdd82fe7d3ffb9836ed50e39f60c2a97aecb99d2741c63e53351dec33c436b",
     "built_at": "2026-11-20T07:33:55Z",
     "revoked": false
+  },
+  {
+    "tag": "v2026.11.31-routes-375cfa563544-pins-4112633",
+    "environment": "prod",
+    "pcr0": "57a14e8c727ce127284019e4fd00032bf3b728a5d35e30c389d6e15d9f0f2b8fe052cf2ad592698de00929bc10a3451f",
+    "pcr1": "3b4a7e1b5f13c5a1000b3ed32ef8995ee13e9876329f9bc72650b918329ef9cf4e2e4d1e1e37375dab0ba56ba0974d03",
+    "pcr2": "bea568ecee3e22a61b06fc22c3c0464d27270e3d000c1f7c66ad485be77f0d6091a450f1651d55e93c3ebe16069be3ca",
+    "built_at": "2026-11-20T07:45:34Z",
+    "revoked": false
   }
 ]
