@@ -1,14 +1,15 @@
 name: sign
 
-# Signs one statement per environment listing its enclave images, and one statement hashing the
-# vendor pins, with Sigstore keyless signing logged to Rekor v2, and commits each statement and its
-# bundle to the statements/images branch. An enclave hands its task keys only to an image that such
-# a statement lists, and takes vendor pins only from such a statement. It accepts only a statement
-# that this file signed on main of this repository in the first attempt of a push or schedule run,
-# so a workflow_dispatch trigger or a re-run would sign nothing it accepts. Everything signed is
-# public at the commit the certificate names, and the signer needs no secret. A run whose
-# statements the newest on the branch already signs, less than a day before, commits nothing, so
-# the hourly runs keep the newest statement well inside the 7 days an enclave allows.
+# Signs one statement per environment listing its enclave images, one statement hashing the
+# vendor pins, and one statement per environment that holds a routes file, hashing it, with Sigstore
+# keyless signing logged to Rekor v2, and commits each statement and its bundle to the
+# statements/images branch. An enclave hands its task keys only to an image that such a statement
+# lists, and takes vendor pins, or a routes file newer than its own, only from such a statement. It
+# accepts only a statement that this file signed on main of this repository in the first attempt of
+# a push or schedule run, so a workflow_dispatch trigger or a re-run would sign nothing it accepts.
+# Everything signed is public at the commit the certificate names, and the signer needs no secret.
+# A run whose statements the newest on the branch already signs, less than a day before, commits
+# nothing, so the hourly runs keep the newest statement well inside the 7 days an enclave allows.
 on:
   push:
     branches: [main]
@@ -18,6 +19,7 @@ on:
       - 'phala_model_pins.json'
       - 'phala_pins.json'
       - 'tinfoil_pins.json'
+      - 'routes/**'
       - '.github/workflows/sign.yml'
       - '.github/workflows/sigstore-signing-config.json'
   schedule:
@@ -100,6 +102,16 @@ jobs:
       # differently from jq and the backend, and jq -j prints a top-level string raw, so both are
       # refused, as is nesting deeper than the app's limit of 128. A key listed twice is refused so that
       # no reader has to agree on which value wins.
+      #
+      # Last, a routes statement for each environment that has a routes/<environment>/ directory:
+      # the sha256 of the bytes of routes/<environment>/routes.json as they are, since the enclave's
+      # worker and its relay compare that same hash, and as base the 64 hex digits that
+      # routes/<environment>/base holds, the sha256 of the routes.json inside the image the file was
+      # made for. An enclave loads the file only when base is its own image's, so the signer checks
+      # the shape of base and not its value, and it checks nothing inside routes.json, which the
+      # enclave holds to its image's bounds itself. routes/ may hold those two files for dev and for
+      # prod and nothing else, each a regular file at the signed commit. A routes.json is at most
+      # 4194304 bytes, the most an enclave reads (MaxFile in internal/routesdata).
       - id: statements
         env:
           SEQUENCE: ${{ steps.head.outputs.sequence }}
@@ -198,8 +210,30 @@ jobs:
           jq -jcSRn --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
             [inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries
             | {type: "morse-vendor-pins-v1", sequence: $sequence, pins_commit: $commit, time: $time, files: .}' "$RUNNER_TEMP/hashes" >"$RUNNER_TEMP/signed/vendor.statement.json"
+          routes_max=4194304
+          [ ! -L routes ] || { echo "routes is a symlink" >&2; exit 1; }
+          while IFS= read -r path; do
+            [[ $path =~ ^routes/(dev|prod)/(routes\.json|base)$ ]] || { echo "$path is not a file routes/ may hold" >&2; exit 1; }
+          done < <(git ls-tree -r --name-only "$COMMIT" -- routes/; [ ! -d routes ] || find routes -mindepth 1 ! -type d)
+          for environment in dev prod; do
+            dir=routes/$environment
+            [ -e "$dir" ] || [ -L "$dir" ] || [ -n "$(git ls-tree --name-only "$COMMIT" -- "$dir")" ] || continue
+            for file in "$dir/routes.json" "$dir/base"; do
+              [ -f "$file" ] && [ ! -L "$file" ] || { echo "$file is not a regular file" >&2; exit 1; }
+              [ "$(git ls-tree --format='%(objectmode) %(objectname)' "$COMMIT" -- "$file")" = "100644 $(git hash-object -- "$file")" ] ||
+                { echo "$file is not the regular file at $COMMIT" >&2; exit 1; }
+            done
+            [ "$(wc -c <"$dir/base")" = 65 ] && base=$(cat "$dir/base") && [[ $base =~ ^[0-9a-f]{64}$ ]] ||
+              { echo "$dir/base is not 64 lowercase hex digits and a newline" >&2; exit 1; }
+            size=$(wc -c <"$dir/routes.json")
+            [ "$size" -ge 1 ] && [ "$size" -le "$routes_max" ] || { echo "$dir/routes.json is $size bytes, not 1 to $routes_max" >&2; exit 1; }
+            hash=$(sha256sum "$dir/routes.json" | cut -c1-64)
+            jq -jcSn --arg environment "$environment" --arg base "$base" --arg hash "$hash" --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
+              {type: "morse-routes-v1", environment: $environment, base: $base, sequence: $sequence, pins_commit: $commit, time: $time,
+               files: {"routes/\($environment)/routes.json": $hash}}' >"$RUNNER_TEMP/signed/routes-$environment.statement.json"
+          done
       # Skips signing when, for every statement, the newest the branch's index.json names lists the
-      # same images or vendor hashes, was signed by this file at the commit it names in a first
+      # same images, vendor hashes, or routes file and base, was signed by this file at the commit it names in a first
       # attempt, and has a certificate issued less than FRESH seconds ago. Rekor v2 entries carry no
       # integrated time, so the age is the certificate's NotBefore, the time pinsig.Admit measures
       # PinsMaxAge from. Any failure to read or check the newest signs again.
@@ -610,7 +644,7 @@ jobs:
           names=()
           for statement in "$RUNNER_TEMP"/signed/*.statement.json; do
             name=$(basename "$statement" .statement.json)
-            [[ $name =~ ^(dev|prod|vendor)$ ]] || { echo "::error::unknown statement $name" >&2; exit 1; }
+            [[ $name =~ ^(dev|prod|vendor|routes-dev|routes-prod)$ ]] || { echo "::error::unknown statement $name" >&2; exit 1; }
             names+=("$name")
             for suffix in statement.json sigstore.json; do
               path=$name/$SEQUENCE-$stamp.$suffix
