@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   # Fails on a repository variable or secret in any workflow, since a watcher cannot read either and
-  # a statement would then depend on it; on a uses: that is not pinned to a 40-hex commit SHA, since
+  # a statement would then depend on it, save the two secrets allowlist.yml reads, which sign nothing;
+  # on a uses: that is not pinned to a 40-hex commit SHA, since
   # a moved tag would change what the signer runs with no commit here for the watcher's allowlist
   # to see; and on a signing config that names a log other than a Rekor v2 shard.
   lint:
@@ -27,7 +28,14 @@ jobs:
           failed=0
           for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
             [ -e "$workflow" ] || continue
-            if grep -nE '(vars|secrets)\.' "$workflow"; then
+            found=$(grep -nE '(vars|secrets)\.' "$workflow" || true)
+            # allowlist.yml signs nothing, and alone may read the two secrets it checks pull requests
+            # with, each as one step's env value under its own name.
+            if [ "$workflow" = .github/workflows/allowlist.yml ]; then
+              found=$(grep -vxE '[0-9]+: +(TOKEN: \$\{\{ secrets\.SIGNER_ALLOWLIST_TOKEN|SOURCE: \$\{\{ secrets\.SIGNER_ALLOWLIST_URL) \}\}' <<<"$found" || true)
+            fi
+            if [ -n "$found" ]; then
+              printf '%s\n' "$found"
               echo "::error file=$workflow::$workflow reads a repository variable or secret, which a watcher cannot read"
               failed=1
             fi
@@ -88,6 +96,15 @@ jobs:
           refuses "a secret in sign.yml" edit .github/workflows/sign.yml .jobs.sign.env.X "$(expression "${secret}X")"
           refuses "a repository variable in a comment" append .github/workflows/sign.yml "# ${var}X"
           refuses "a secret in check.yml" edit .github/workflows/check.yml .jobs.lint.env.X "$(expression "${secret}X")"
+          if ! lints "$(mutated edit .github/workflows/allowlist.yml .name allowlist)"; then
+            echo "FAIL: the lint refused allowlist.yml once yq rewrote it unchanged"; failed=1
+          fi
+          refuses "another secret in allowlist.yml" edit .github/workflows/allowlist.yml '.jobs.signer-allowlist.steps[1].env.X' "$(expression "${secret}X")"
+          refuses "the allowlist token under another name in allowlist.yml" edit .github/workflows/allowlist.yml '.jobs.signer-allowlist.steps[1].env.X' "$(expression "${secret}SIGNER_ALLOWLIST_TOKEN")"
+          refuses "the allowlist token in a run line of allowlist.yml" append .github/workflows/allowlist.yml "#          TOKEN: $(expression "${secret}SIGNER_ALLOWLIST_TOKEN") x"
+          refuses "a repository variable in allowlist.yml" append .github/workflows/allowlist.yml "# ${var}X"
+          refuses "the allowlist token in sign.yml" edit .github/workflows/sign.yml .jobs.sign.env.TOKEN "$(expression "${secret}SIGNER_ALLOWLIST_TOKEN")"
+          refuses "the allowlist URL in check.yml" edit .github/workflows/check.yml .jobs.lint.env.SOURCE "$(expression "${secret}SIGNER_ALLOWLIST_URL")"
           refuses "a uses: on a tag" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@v7.0.1
           refuses "a uses: on a branch" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@main
           refuses "a uses: on 39 hex digits" edit .github/workflows/sign.yml '.jobs.sign.steps[1].uses' actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b
