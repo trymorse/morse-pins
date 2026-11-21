@@ -218,6 +218,89 @@ jobs:
             echo "FAIL: the vendor statement does not name the signed commit"; failed=1
           fi
 
+          # A routes statement is written for each environment whose routes/<environment>/ holds a
+          # routes.json and a base. It hashes the file's bytes as they are, so the fixture is written
+          # with spaces and a trailing newline that RFC 8785 would drop, and it carries base as given.
+          routes_base=$(printf 'the routes.json inside an image' | sha256sum | cut -c1-64)
+          routes_json='{"models": [ ],\n "aliases": []}\n'
+          routes_hash=$(printf "$routes_json" | sha256sum | cut -c1-64)
+          # Makes a pins directory, runs $1 in its repo/ and commits, then runs $2 there uncommitted,
+          # and prints the directory.
+          routes_dir() {
+            local dir
+            dir=$(pins_dir . "$pins")
+            (cd "$dir/repo" && eval "$1")
+            commit "$dir/repo" routes
+            [ -z "${2:-}" ] || (cd "$dir/repo" && eval "$2")
+            echo "$dir"
+          }
+          routes_for() { echo "mkdir -p routes/$1 && printf '$routes_json' >routes/$1/routes.json && echo $routes_base >routes/$1/base"; }
+          for environments in prod dev "dev prod"; do
+            setup=true
+            for environment in $environments; do
+              setup+=" && $(routes_for "$environment")"
+            done
+            want="dev.statement.json prod.statement.json $(printf 'routes-%s.statement.json ' $environments)vendor.statement.json"
+            dir=$(routes_dir "$setup")
+            commit=$(git -C "$dir/repo" rev-parse HEAD)
+            if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
+              echo "FAIL: routes for $environments are refused"; failed=1
+              continue
+            fi
+            if [ "$(cd "$dir/signed" && echo *)" != "$want" ]; then
+              echo "FAIL: the files written with routes for $environments are $(cd "$dir/signed" && echo *), not $want"; failed=1
+            fi
+            for environment in $environments; do
+              printf '{"base":"%s","environment":"%s","files":{"routes/%s/routes.json":"%s"},"pins_commit":"%s","sequence":101,"time":"2026-11-03T04:17:00Z","type":"morse-routes-v1"}' \
+                "$routes_base" "$environment" "$environment" "$routes_hash" "$commit" >"$dir/routes.want"
+              if ! cmp "$dir/routes.want" "$dir/signed/routes-$environment.statement.json"; then
+                echo "FAIL: the $environment routes statement is not these bytes:"; cat "$dir/routes.want"; echo; failed=1
+              fi
+            done
+          done
+          # The signer checks nothing inside routes.json, which the enclave holds to its image's bounds.
+          dir=$(routes_dir "$(routes_for prod) && printf 'not JSON' >routes/prod/routes.json")
+          if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
+            echo "FAIL: refused a routes.json that is not JSON"; failed=1
+          elif [ "$(jq -r '.files["routes/prod/routes.json"]' "$dir/signed/routes-prod.statement.json")" != "$(printf 'not JSON' | sha256sum | cut -c1-64)" ]; then
+            echo "FAIL: a routes.json that is not JSON is not hashed as its bytes"; failed=1
+          fi
+          dir=$(routes_dir "$(routes_for prod) && head -c 4194304 /dev/zero >routes/prod/routes.json")
+          if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
+            echo "FAIL: refused a routes.json of 4194304 bytes"; failed=1
+          fi
+          # Runs $2 committed and $4 uncommitted, and checks the step refuses with $3.
+          refuses_routes() {
+            local dir err
+            dir=$(routes_dir "$2" "${4:-}")
+            if err=$(statements "$dir" 101 2026-11-03T04:17:00Z 2>&1 >/dev/null); then
+              echo "FAIL: signed a statement when $1"; failed=1
+            elif [[ $err != *"$3"* ]]; then
+              echo "FAIL: when $1, the step did not say \"$3\" but: $err"; failed=1
+            fi
+          }
+          other_base=$(printf 'another image' | sha256sum | cut -c1-64)
+          refuses_routes "routes/prod has no base" "$(routes_for prod) && rm routes/prod/base" "routes/prod/base is not a regular file"
+          refuses_routes "routes/prod has no routes.json" "$(routes_for prod) && rm routes/prod/routes.json" "routes/prod/routes.json is not a regular file"
+          refuses_routes "a base is short" "$(routes_for prod) && echo abc >routes/prod/base" "routes/prod/base is not 64 lowercase hex digits and a newline"
+          refuses_routes "a base is uppercase" "$(routes_for prod) && echo ${routes_base^^} >routes/prod/base" "routes/prod/base is not 64 lowercase hex digits and a newline"
+          refuses_routes "a base has no newline" "$(routes_for prod) && printf %s $routes_base >routes/prod/base" "routes/prod/base is not 64 lowercase hex digits and a newline"
+          refuses_routes "a base has a second line" "$(routes_for prod) && printf '%s\\n\\n' $routes_base >routes/prod/base" "routes/prod/base is not 64 lowercase hex digits and a newline"
+          refuses_routes "a base holds 65 hex digits" "$(routes_for prod) && printf %sa $routes_base >routes/prod/base" "routes/prod/base is not 64 lowercase hex digits and a newline"
+          refuses_routes "a routes.json is empty" "$(routes_for prod) && : >routes/prod/routes.json" "routes/prod/routes.json is 0 bytes"
+          refuses_routes "a routes.json is over 4194304 bytes" "$(routes_for prod) && head -c 4194305 /dev/zero >routes/prod/routes.json" "routes/prod/routes.json is 4194305 bytes"
+          refuses_routes "routes/ holds another environment" "$(routes_for prod) && $(routes_for staging)" "is not a file routes/ may hold"
+          refuses_routes "routes/prod holds a third file" "$(routes_for prod) && echo '{}' >routes/prod/relay.json" "routes/prod/relay.json is not a file routes/ may hold"
+          refuses_routes "routes/ holds a file of its own" "$(routes_for prod) && echo x >routes/README" "routes/README is not a file routes/ may hold"
+          refuses_routes "routes/prod/routes.json is deeper" "mkdir -p routes/prod/routes.json && echo x >routes/prod/routes.json/x && echo $routes_base >routes/prod/base" "routes/prod/routes.json/x is not a file routes/ may hold"
+          refuses_routes "a routes.json is a symlink" "$(routes_for prod) && rm routes/prod/routes.json && ln -s base routes/prod/routes.json" "routes/prod/routes.json is not a regular file"
+          refuses_routes "routes is a symlink" "mkdir elsewhere && (cd elsewhere && mkdir -p prod && echo x >prod/routes.json && echo $routes_base >prod/base) && ln -s elsewhere routes" "routes is a symlink"
+          refuses_routes "a routes.json differs from the signed commit's" "$(routes_for prod)" "routes/prod/routes.json is not the regular file at" "printf ' ' >>routes/prod/routes.json"
+          refuses_routes "a base differs from the signed commit's" "$(routes_for prod)" "routes/prod/base is not the regular file at" "echo $other_base >routes/prod/base"
+          refuses_routes "the routes files are not in the signed commit" true "is not the regular file at" "$(routes_for prod)"
+          refuses_routes "the checkout holds a file routes/ may not hold" "$(routes_for prod)" "routes/prod/x is not a file routes/ may hold" "echo x >routes/prod/x"
+          refuses_routes "the checkout lost the routes files of the signed commit" "$(routes_for prod)" "routes/prod/routes.json is not a regular file" "rm -r routes"
+
           refuses() {
             local dir
             dir=$(pins_dir "$2" "$pins")
@@ -1041,6 +1124,29 @@ jobs:
             echo "FAIL: the branch does not keep every prod statement"; failed=1
           fi
           lists dev 250-20261109T214300Z 241-20261109T204300Z
+          # A routes statement goes under routes-<environment>/, with an index of its own.
+          sequence=1000
+          signed routes-prod routes-dev
+          run 1000 2026-11-10T00:30:00Z || { echo "FAIL: a run with routes statements failed:"; cat "$work/log"; failed=1; }
+          for name in routes-prod routes-dev; do
+            for suffix in statement.json sigstore.json; do
+              if ! cmp -s <(show "$name/1000-20261110T003000Z.$suffix") "$out/signed/$name.$suffix"; then
+                echo "FAIL: $name/1000-20261110T003000Z.$suffix is not the signed file"; failed=1
+              fi
+            done
+            lists "$name" 1000-20261110T003000Z
+          done
+          lists dev 250-20261109T214300Z 241-20261109T204300Z
+          before=$(tip)
+          for name in routes routes-staging staging; do
+            sequence=1001
+            signed prod "$name"
+            if run 1001 2026-11-10T00:45:00Z || [ "$(tip)" != "$before" ]; then
+              echo "FAIL: committed a statement named $name"; failed=1
+            elif ! grep -qF "unknown statement $name" "$work/log"; then
+              echo "FAIL: a statement named $name was not refused as unknown but: $(cat "$work/log")"; failed=1
+            fi
+          done
 
           before=$(tip)
           sequence=1000
