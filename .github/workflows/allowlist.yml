@@ -1,0 +1,78 @@
+name: allowlist
+
+# Fails a pull request that would give main a .github tree the signer allowlist does not yet name.
+# Morse's door watcher fails on every commit of main whose .github tree, the signer's code, its
+# allowlist does not name, so a change here must land in two steps: first the allowlist change in
+# Morse's backend, then this pull request. A pull request that leaves .github as main has it passes
+# without reading anything. The tree is taken from the merge commit GitHub builds for the pull
+# request, as git rev-parse <commit>:.github, which is how the watcher reads each commit of main.
+#
+# This is the one workflow that reads a secret: a read-only token for the private repository that
+# holds the allowlist, and the API URL of the file there, so this file names neither. It signs
+# nothing and writes nothing, and the lint in check.yml allows these two secrets here and nowhere
+# else. It prints only the tree and whether the allowlist names it. A pull request from a fork gets
+# no secrets, so one that changes .github fails here.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signer-allowlist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and its first parent, main as the merge would find it.
+          fetch-depth: 2
+      - env:
+          TOKEN: ${{ secrets.SIGNER_ALLOWLIST_TOKEN }}
+          SOURCE: ${{ secrets.SIGNER_ALLOWLIST_URL }}
+        run: |
+          set -euo pipefail
+          tree=$(git rev-parse --verify --quiet 'HEAD:.github' || echo none)
+          base=$(git rev-parse --verify --quiet 'HEAD^1:.github' || echo none)
+          if [ "$tree" = "$base" ]; then
+            echo "::notice::This pull request leaves .github as main has it, $tree, so the signer allowlist needs no change."
+            exit 0
+          fi
+          echo "After this merge, main's .github tree is $tree."
+          if [ -z "$TOKEN" ] || [ -z "$SOURCE" ]; then
+            echo "::error::This run cannot read the signer allowlist, so it fails closed. A pull request from a fork is given none. A change to .github must come from a branch of this repository."
+            exit 1
+          fi
+          case $SOURCE in
+            https://api.github.com/repos/*) ;;
+            *) echo "::error::The allowlist source is not a GitHub API URL, so this run does not send its token there."; exit 1 ;;
+          esac
+          file=$RUNNER_TEMP/allowlist.py
+          if ! curl -fsS --retry 3 --max-time 30 -o "$file" \
+            -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github.raw' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' "$SOURCE" 2>/dev/null; then
+            echo "::error::The signer allowlist could not be read, so this run fails closed. Run it again, and if it fails again check the token."
+            exit 1
+          fi
+          # Reads the SIGNER_TREES set literal without running the file, and prints nothing of it.
+          status=0
+          python3 -I - "$file" "$tree" <<'PY' || status=$?
+          import ast, re, sys
+          try:
+              module = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+              values = [ast.literal_eval(node.value) for node in module.body if isinstance(node, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == "SIGNER_TREES" for t in node.targets)]
+          except (SyntaxError, ValueError, UnicodeDecodeError):
+              sys.exit(2)
+          if len(values) != 1 or not isinstance(values[0], (set, frozenset)) or not values[0] \
+                  or not all(isinstance(v, str) and re.fullmatch("[0-9a-f]{40}", v) for v in values[0]):
+              sys.exit(2)
+          sys.exit(0 if sys.argv[2] in values[0] else 1)
+          PY
+          rm -f "$file"
+          case $status in
+            0) echo "The signer allowlist names $tree. PASS" ;;
+            1) echo "::error::This .github tree, $tree, is not yet on the signer allowlist. Merge the allowlist change first, then run this check again. FAIL"; exit 1 ;;
+            *) echo "::error::The signer allowlist was read but holds no list of trees this check understands, so it fails closed. FAIL"; exit 1 ;;
+          esac
