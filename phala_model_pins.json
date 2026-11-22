@@ -26,6 +26,12 @@
       "first_seen": "2026-10-17"
     },
     {
+      "image": "ghcr.io/kingsleydon/sglang",
+      "digest": "sha256:0927760d2a1f51aec7027efdad6348e418d4d5864f824a7d92b9202ee584f73c",
+      "source": "https://github.com/Phala-Network/sglang@3923738f25611164d67496bbe3789a78a167c5d1",
+      "first_seen": "2026-11-22"
+    },
+    {
       "image": "ghcr.io/phala-network/cvm-log-collector",
       "digest": "sha256:6f29b15de629b1517b72f843aed20029d49d5b2d4bf43ecf2461f24341ddef82",
       "source": "https://github.com/Phala-Network/cvm-log-collector@13cd1064897ffb9160297f587d3dd97b45f74799",
@@ -117,6 +123,12 @@
     },
     {
       "image": "ghcr.io/phala-network/sglang",
+      "digest": "sha256:4452607c9de00352c518f7d8fed31069ac159fd434aeed2925d8cbfe1b70cebb",
+      "source": "https://github.com/Phala-Network/sglang@1c9a64c947af8fd05cf2a813111d919e3e682146",
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "ghcr.io/phala-network/sglang",
       "digest": "sha256:6a74c66ab1c44d32d07d8f227fc5074a43a330251ea3e2b37ebe731a6178e5ee",
       "source": "https://github.com/Phala-Network/sglang@c2ce5382dad45fd85e39f5d4e1d93165225eb34d",
       "first_seen": "2026-10-17"
@@ -186,6 +198,54 @@
       "digest": "sha256:c0afc4864dca9c68694cd1290433f0ee79b5c55be80f6745a165ffe373b9a564",
       "source": null,
       "first_seen": "2026-10-17"
+    },
+    {
+      "image": "offline.invalid/ccimage/alloy",
+      "digest": "sha256:036800bc67a8f8eca152238d299639c0c20071d6ec4d2ac1c5b53d057c342c96",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/cvm-log-collector",
+      "digest": "sha256:4120eb522572f065e0cf7dfdaae70a134327b21442c07280449b1771431313e5",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/gpu-exporter",
+      "digest": "sha256:69185a87848679bf6f7a3849796508cbccb09664c02620b6934ef948ab59098c",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/haproxy",
+      "digest": "sha256:ded27daa35d143118104c6c72a9a29ffe7533d6916b95aba0bf3b8e6e9b2b658",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/ingress",
+      "digest": "sha256:4fb7383256c0d1e791f195478f9d049952f9da0536af4f5e064c1763c3e1d1e6",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/k3",
+      "digest": "sha256:b83bde5f6369704cfe2e8371c79872069b2752760c6311c31f674576eb1cb153",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/node-exporter",
+      "digest": "sha256:48161f90fe49e858c67c5b1e9362c87e2c06882dd16bc3bbe5f2699fcd7a1cf1",
+      "source": null,
+      "first_seen": "2026-11-22"
+    },
+    {
+      "image": "offline.invalid/ccimage/pig",
+      "digest": "sha256:169c139900059b1cfd0523fd10876b84b3c6a7530cddf387341b4e1da23b2e0b",
+      "source": null,
+      "first_seen": "2026-11-22"
     },
     {
       "image": "vllm/vllm-openai",
