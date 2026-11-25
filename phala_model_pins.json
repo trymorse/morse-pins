@@ -248,6 +248,12 @@
       "first_seen": "2026-11-22"
     },
     {
+      "image": "offline.invalid/ccimage/serving",
+      "digest": "sha256:da041889fb6f201ab37e740786a19a813dc82b80c13f3ab29dd58735a0ab9cd9",
+      "source": null,
+      "first_seen": "2026-11-25"
+    },
+    {
       "image": "vllm/vllm-openai",
       "digest": "sha256:20fdb089454afbb324efa4110a2c025ff7b27cc1a086e07aa580b18df8ad1ce1",
       "source": "https://github.com/vllm-project/vllm@62d4bc3c7e33b1b6c906e233e6af2d3506c482ca",
