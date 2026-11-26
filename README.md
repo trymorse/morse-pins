@@ -17,6 +17,7 @@ A bot makes each commit when Morse's private pins change. Its message says what 
 | `near_pins.json` | The NEAR AI Cloud gateway and model workloads: app ids, KMS roots, TD attributes, the Intel TCB statuses accepted, and the composes, OS images, and instances seen. |
 | `tinfoil_pins.json` | Tinfoil's confidential model router: its hosts, each router release it may run by its AMD SEV-SNP measurement, the guest policy and VMPL, the lowest TCB accepted, and the chips seen. |
 | `phala_model_pins.json` | The container images Phala's model servers ran, one entry per image digest. It records what ran. It does not approve anything. |
+| `v5/phala_pins.json` | `phala_pins.json` plus `kms_k256_pubkey`, the compressed secp256k1 root key of Phala's key service, which Phala's key service contract on Base lists beside the pinned `key_provider_id`. Every other field is the same as in `phala_pins.json`. Morse's installed apps read the files above, not this one. |
 | `composes/<compose_hash>` | The measured `app_compose` of each pinned Phala gateway release, named by its sha256. |
 
 ## Signed releases
