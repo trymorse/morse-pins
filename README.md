@@ -56,6 +56,7 @@ A second signer runs in this repository, with the identity `https://github.com/t
 |---|---|
 | `dev/`, `prod/` | A `morse-enclave-pins-v1` statement per environment, listing that environment's images of `enclave_pins.json` |
 | `vendor/` | A `morse-vendor-pins-v1` statement hashing the vendor pins files, as `vendor.statement.json` does |
+| `vendor-v5/` | A `morse-vendor-pins-v5` statement hashing the same vendor pins files as `vendor/`, except that it hashes `v5/phala_pins.json` in place of `phala_pins.json`, keyed by that path |
 
 Each directory holds `<sequence>-<time>.statement.json`, its `<sequence>-<time>.sigstore.json` bundle, and `index.json`, which lists the statements newest first. Here `pins_commit` and `sequence` refer to this repository's `main`, not the private one. Morse's enclave trusts only this second signer: it hands its task keys only to an image that such a statement lists, and takes newer vendor pins only from such a statement. Morse's apps instead take newer vendor pins from a release's vendor statement, signed by the release identity above.
 
