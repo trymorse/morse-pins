@@ -136,8 +136,12 @@ jobs:
           step=$RUNNER_TEMP/statements.sh
           yq -e '.jobs.sign.steps[] | select(.id == "statements") | .run' .github/workflows/sign.yml >"$step"
           vendor_files=$(yq -e '.jobs.sign.env.VENDOR_FILES' .github/workflows/sign.yml)
+          vendor_v5_files=$(yq -e '.jobs.sign.env.VENDOR_V5_FILES' .github/workflows/sign.yml)
+          every_vendor_file=$(printf '%s\n' $vendor_files $vendor_v5_files | sort -u)
           pins=$PWD/enclave_pins.json
           failed=0
+          # echo * orders by locale; this one puts vendor-v5 before vendor on every runner.
+          export LC_ALL=C.UTF-8
           export GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.com GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@example.com
 
           # Each vendor fixture is written with its keys out of order and with spaces, and its expected
@@ -148,7 +152,10 @@ jobs:
           printf '{"version":1,"containers":[]}' >"$vendors/phala_model_pins.json"
           printf '{\n\t"version": 1,\n\t"identity": "phala"\n}\n' >"$vendors/phala_pins.json"
           printf '{"version":1,"hosts":["h"]}\n' >"$vendors/tinfoil_pins.json"
-          assets="dev.statement.json prod.statement.json vendor.statement.json"
+          # Phala's v5 file is the root's plus the key service root, as the pins project publishes it.
+          mkdir "$vendors/v5"
+          printf '{"version": 1,\n "kms_k256_pubkey": "02a335aea3df11d46ae0a373d3f26fbd1d208572ecc87e630e618dac693b7af721",\n "identity": "phala"}\n' >"$vendors/v5/phala_pins.json"
+          assets="dev.statement.json prod.statement.json vendor-v5.statement.json vendor.statement.json"
 
           # Commits everything in the repository $1, made if need be.
           commit() {
@@ -159,19 +166,17 @@ jobs:
           # Makes a directory whose repo/ commits the enclave pins of $2 filtered by $1 and the vendor
           # files of $3, and prints it. The step writes its statements to its signed/.
           pins_dir() {
-            local dir file
+            local dir
             dir=$(mktemp -d)
             mkdir "$dir/repo"
             jq "$1" "$2" >"$dir/repo/enclave_pins.json"
-            for file in $vendor_files; do
-              cp "${3:-$vendors}/$file" "$dir/repo/"
-            done
+            (cd "${3:-$vendors}" && cp --parents $every_vendor_file "$dir/repo/")
             commit "$dir/repo"
             echo "$dir"
           }
           # Runs the step in $1/repo with sequence $2 and time $3, signing commit $4 or the repository's HEAD.
           statements() {
-            (cd "$1/repo" && RUNNER_TEMP=$1 VENDOR_FILES=$vendor_files SEQUENCE=$2 COMMIT=${4:-$(git rev-parse HEAD)} TIME=$3 bash --noprofile --norc -eo pipefail "$step")
+            (cd "$1/repo" && RUNNER_TEMP=$1 VENDOR_FILES=$vendor_files VENDOR_V5_FILES=$vendor_v5_files SEQUENCE=$2 COMMIT=${4:-$(git rev-parse HEAD)} TIME=$3 bash --noprofile --norc -eo pipefail "$step")
           }
 
           hex() { printf "$1%.0s" {1..96}; }
@@ -196,27 +201,34 @@ jobs:
               "$(hex a)" "$(hex b)" "$(hex f)" "$(hex c)" "$(hex d)" "$(hex e)" "$commit" "$sequence" "$time" >"$dir/prod.want"
             printf '{"files":{"v4/near_pins.json":"e33d060b9109ff309755b7c6fd244147f9dca651e79aab33607a797423397dc3","v4/phala_model_pins.json":"b82ceaa08f0721d27f1c8c4b4ca6570b0396e16f3c1f6b2f23bd309408891df0","v4/phala_pins.json":"ce08f3e4859f0adcc28e2dc92f26f55f19865ea317f9272a40bd0f422fc9fb5c","v4/tinfoil_pins.json":"6cfdbf49b2d582eb5fb1f6ddda3f6e1099f2cd45bfd7cf54917d7608ca7036cb"},"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-vendor-pins-v1"}' \
               "$commit" "$sequence" "$time" >"$dir/vendor.want"
+            # The same sequence, commit and time, with Phala's v5 file in place of the root's under its
+            # own path.
+            printf '{"files":{"v4/near_pins.json":"e33d060b9109ff309755b7c6fd244147f9dca651e79aab33607a797423397dc3","v4/phala_model_pins.json":"b82ceaa08f0721d27f1c8c4b4ca6570b0396e16f3c1f6b2f23bd309408891df0","v4/tinfoil_pins.json":"6cfdbf49b2d582eb5fb1f6ddda3f6e1099f2cd45bfd7cf54917d7608ca7036cb","v5/phala_pins.json":"8d0d3430354c8af020784abe60d8e06de3f701d799e576957e3a7e86a1d52ebb"},"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-vendor-pins-v5"}' \
+              "$commit" "$sequence" "$time" >"$dir/vendor-v5.want"
             if [ "$(cd "$dir/signed" && echo *)" != "$assets" ]; then
               echo "FAIL: the files written with sequence $sequence are $(cd "$dir/signed" && echo *), not $assets"; failed=1
             fi
-            for name in dev prod vendor; do
+            for name in dev prod vendor vendor-v5; do
               if ! cmp "$dir/$name.want" "$dir/signed/$name.statement.json"; then
                 echo "FAIL: the $name statement with sequence $sequence is not these bytes:"; cat "$dir/$name.want"; echo; failed=1
               fi
             done
           done
 
-          # The vendor statement hashes the four vendor files at the signed commit, keyed by their path
-          # in the private pins repository.
+          # Each vendor statement hashes its four files at the signed commit, keyed by their path in
+          # the private pins repository.
           dir=$(pins_dir . "$pins" "$PWD")
           read -ra vendor <<<"$vendor_files"
           keys=$(printf 'v4/%s\n' "${vendor[@]}" | paste -sd' ')
+          v5_keys="v4/near_pins.json v4/phala_model_pins.json v4/tinfoil_pins.json v5/phala_pins.json"
           if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
             echo "FAIL: the real pins are refused"; failed=1
           elif [ "$(cd "$dir/signed" && echo *)" != "$assets" ]; then
             echo "FAIL: the files written are $(cd "$dir/signed" && echo *), not $assets"; failed=1
           elif [ "$(jq -r '.files | keys | join(" ")' "$dir/signed/vendor.statement.json")" != "$keys" ]; then
             echo "FAIL: the real vendor statement hashes $(jq -r '.files | keys | join(" ")' "$dir/signed/vendor.statement.json"), not $keys"; failed=1
+          elif [ "$(jq -r '.files | keys | join(" ")' "$dir/signed/vendor-v5.statement.json")" != "$v5_keys" ]; then
+            echo "FAIL: the real v5 vendor statement hashes $(jq -r '.files | keys | join(" ")' "$dir/signed/vendor-v5.statement.json"), not $v5_keys"; failed=1
           else
             for file in $vendor_files; do
               want=$(git -C "$dir/repo" show "HEAD:$file" | jq -jcS . | sha256sum | cut -c1-64)
@@ -224,6 +236,10 @@ jobs:
                 echo "FAIL: the vendor statement does not hash $file at the signed commit as $want"; failed=1
               fi
             done
+            want=$(git -C "$dir/repo" show HEAD:v5/phala_pins.json | jq -jcS . | sha256sum | cut -c1-64)
+            if [ "$(jq -r '.files["v5/phala_pins.json"]' "$dir/signed/vendor-v5.statement.json")" != "$want" ]; then
+              echo "FAIL: the v5 vendor statement does not hash v5/phala_pins.json at the signed commit as $want"; failed=1
+            fi
           fi
           dir=$(pins_dir . "$pins" "$PWD")
           first=$(git -C "$dir/repo" rev-parse HEAD)
@@ -257,7 +273,7 @@ jobs:
             for environment in $environments; do
               setup+=" && $(routes_for "$environment")"
             done
-            want="dev.statement.json prod.statement.json $(printf 'routes-%s.statement.json ' $environments)vendor.statement.json"
+            want="dev.statement.json prod.statement.json $(printf 'routes-%s.statement.json ' $environments)vendor-v5.statement.json vendor.statement.json"
             dir=$(routes_dir "$setup")
             commit=$(git -C "$dir/repo" rev-parse HEAD)
             if ! statements "$dir" 101 2026-11-03T04:17:00Z; then
@@ -354,6 +370,13 @@ jobs:
           refuses_change "a vendor file is not in the signed commit" 'git rm -q --cached tinfoil_pins.json && git commit -qm drop' "tinfoil_pins.json is not the regular file at" uncommitted
           refuses_change "the signed commit holds a vendor file as a symlink" 'mv near_pins.json near && ln -s near near_pins.json && git add -A && git commit -qm link && rm near_pins.json && mv near near_pins.json' "near_pins.json is not the regular file at" uncommitted
           refuses_change "a vendor file is missing" 'rm tinfoil_pins.json' "tinfoil_pins.json is not a regular file"
+          # v5/phala_pins.json is held to the same rules as the files at the root, and a refusal of it
+          # signs no statement at all.
+          refuses_change "the v5 file differs from the signed commit's" 'printf "{}" >v5/phala_pins.json' "v5/phala_pins.json is not the regular file at" uncommitted
+          refuses_change "the v5 file is missing" 'rm v5/phala_pins.json' "v5/phala_pins.json is not a regular file"
+          refuses_change "the v5 file is a symlink" 'rm v5/phala_pins.json && ln -s ../phala_pins.json v5/phala_pins.json' "v5/phala_pins.json is not a regular file"
+          refuses_change "the v5 folder is a symlink" 'mv v5 elsewhere && ln -s elsewhere v5' "v5/phala_pins.json is not the regular file at"
+          refuses_change "the v5 file lists a key twice" 'printf "{\"a\":1,\"a\":2}" >v5/phala_pins.json' "v5/phala_pins.json lists the key 'a' twice"
           refuses_change "a vendor file is a symlink" 'rm near_pins.json && ln -s phala_pins.json near_pins.json' "near_pins.json is not a regular file"
           refuses_change "a vendor file is empty" ': >phala_pins.json' "is not one JSON document: Expecting value"
           refuses_change "a vendor file is not JSON" 'echo "{" >phala_pins.json' "is not one JSON document: Expecting property name"
@@ -410,12 +433,10 @@ jobs:
           # of the signed commit. Each argument is one commit's pins, the fixture through a jq filter,
           # oldest first.
           history() {
-            local dir change file
+            local dir change
             dir=$(mktemp -d)
             mkdir "$dir/repo"
-            for file in $vendor_files; do
-              cp "$vendors/$file" "$dir/repo/"
-            done
+            (cd "$vendors" && cp --parents $every_vendor_file "$dir/repo/")
             for change in "$@"; do
               jq "$change" "$fixture" >"$dir/repo/enclave_pins.json"
               commit "$dir/repo" "$change"
@@ -448,7 +469,7 @@ jobs:
             '(.[] | select(.environment == "dev") | .revoked) = true' \
             '(.[] | select(.environment == "dev") | .revoked) = true | . + [.[] | select(.environment == "dev") | .environment = "prod" | .revoked = false]'
           dir=$(mktemp -d)
-          if ! (RUNNER_TEMP=$dir VENDOR_FILES=$vendor_files SEQUENCE=101 COMMIT=$(git rev-parse HEAD) TIME=2026-11-03T04:17:00Z bash --noprofile --norc -eo pipefail "$step" >/dev/null); then
+          if ! (RUNNER_TEMP=$dir VENDOR_FILES=$vendor_files VENDOR_V5_FILES=$vendor_v5_files SEQUENCE=101 COMMIT=$(git rev-parse HEAD) TIME=2026-11-03T04:17:00Z bash --noprofile --norc -eo pipefail "$step" >/dev/null); then
             echo "FAIL: refused the history of this repository's enclave_pins.json"; failed=1
           fi
           exit $failed
@@ -495,6 +516,7 @@ jobs:
           issuer=$(yq -e '.jobs.sign.env.ISSUER' .github/workflows/sign.yml)
           fresh=$(yq -e '.jobs.sign.steps[] | select(.id == "newest") | .env.FRESH' .github/workflows/sign.yml)
           vendor_files=$(yq -e '.jobs.sign.env.VENDOR_FILES' .github/workflows/sign.yml)
+          vendor_v5_files=$(yq -e '.jobs.sign.env.VENDOR_V5_FILES' .github/workflows/sign.yml)
           branch=$(yq -e '.jobs.sign.env.STATEMENTS_BRANCH' .github/workflows/sign.yml)
           export GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.com GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@example.com
           work=$RUNNER_TEMP/newest
@@ -504,14 +526,13 @@ jobs:
 
           # The step runs in ours/repo, a checkout of the real pins whose origin is a bare repository
           # that holds the statements branch each case writes.
-          read -ra vendor <<<"$vendor_files"
-          cp enclave_pins.json "${vendor[@]}" "$ours/repo/"
+          cp --parents enclave_pins.json $(printf '%s\n' $vendor_files $vendor_v5_files | sort -u) "$ours/repo/"
           git -c init.defaultBranch=main init -q "$ours/repo"
           git -C "$ours/repo" add -A
           git -C "$ours/repo" commit -qm pins
           git init -q --bare "$work/origin.git"
           git -C "$ours/repo" remote add origin "$work/origin.git"
-          (cd "$ours/repo" && RUNNER_TEMP=$ours VENDOR_FILES=$vendor_files SEQUENCE=300 COMMIT="$(git rev-parse HEAD)" TIME=2026-11-04T05:43:00Z bash --noprofile --norc -eo pipefail "$statements")
+          (cd "$ours/repo" && RUNNER_TEMP=$ours VENDOR_FILES=$vendor_files VENDOR_V5_FILES=$vendor_v5_files SEQUENCE=300 COMMIT="$(git rev-parse HEAD)" TIME=2026-11-04T05:43:00Z bash --noprofile --norc -eo pipefail "$statements")
 
           cat >"$ours/cosign" <<'COSIGN'
           #!/usr/bin/env bash
@@ -586,11 +607,16 @@ jobs:
             fi
           }
           same='.sequence = 201 | .time = "2026-11-04T04:43:00Z" | .pins_commit = ("a" * 40)'
+          # Puts both vendor statements, the v1 one changed by filter $1 and both signed with certificate $2.
+          vendor_statements() {
+            put vendor "${1:-$same}" "${2:-hour}" | index vendor
+            put vendor-v5 "$same" "${2:-hour}" | index vendor-v5
+          }
           # Publishes one statement of each name, each changed by its filter or signed by its certificate.
           branch_of() {
             put dev "${1:-$same}" "${4:-hour}" | index dev
             put prod "${2:-$same}" "${5:-hour}" | index prod
-            put vendor "${3:-$same}" "${6:-hour}" | index vendor
+            vendor_statements "${3:-$same}" "${6:-hour}"
             publish
           }
 
@@ -601,12 +627,12 @@ jobs:
           skips "the newest statements were signed just under FRESH seconds ago"
           { put prod "$same" hour '[{}]' 202; put prod "$same | .images[0].revoked |= not" hour '[{}]' 201; } | index prod
           put dev "$same" hour | index dev
-          put vendor "$same" hour | index vendor
+          vendor_statements
           publish
           skips "the newest prod statement is the same and an older one differs"
           { put prod "$same | .images[0].revoked |= not" hour '[{}]' 202; put prod "$same" hour '[{}]' 201; } | index prod
           put dev "$same" hour | index dev
-          put vendor "$same" hour | index vendor
+          vendor_statements
           publish
           signs "the newest prod statement differs and an older one is the same"
 
@@ -633,33 +659,45 @@ jobs:
           done
           put dev "$same" hour | index dev
           put prod "$same" hour '[{}, {}]' | index prod
-          put vendor "$same" hour | index vendor
+          vendor_statements
           publish
           signs "the newest prod bundle has two log entries"
           put dev "$same" hour | index dev
           put prod "$same" hour '[]' | index prod
-          put vendor "$same" hour | index vendor
+          vendor_statements
           publish
           signs "the newest prod bundle has no log entry"
           put dev "$same" hour | index dev
           put prod "$same" hour | index prod
-          put vendor "$same" hour | index vendor
+          vendor_statements
           jq '.test_signs = "0"' "$tree/prod/201-20261104T044300Z.sigstore.json" >"$work/x" && mv "$work/x" "$tree/prod/201-20261104T044300Z.sigstore.json"
           publish
           signs "the newest prod signature does not verify"
           put prod "$same" hour | index prod
-          put vendor "$same" hour | index vendor
+          vendor_statements
           publish
           signs "the branch has no dev index"
           put dev "$same" hour | index dev
           put prod "$same" hour | index prod
           publish
           signs "the branch has no vendor index"
+          # What the branch holds before the first run that signs v5.
+          put dev "$same" hour | index dev
+          put prod "$same" hour | index prod
+          put vendor "$same" hour | index vendor
+          publish
+          signs "the branch has no vendor-v5 index"
+          put dev "$same" hour | index dev
+          put prod "$same" hour | index prod
+          put vendor "$same" hour | index vendor
+          put vendor-v5 "$same | .files[\"v5/phala_pins.json\"] = (\"f\" * 64)" hour | index vendor-v5
+          publish
+          signs "the v5 file's hash differs"
 
           # Writes the dev and vendor statements as the newest does, and prod's index.json as $1.
           prod_index() {
             put dev "$same" hour | index dev
-            put vendor "$same" hour | index vendor
+            vendor_statements
             put prod "$same" hour >/dev/null
             printf '%s' "$1" >"$tree/prod/index.json"
             publish
@@ -1089,7 +1127,7 @@ jobs:
           }
 
           sequence=241
-          signed dev prod vendor
+          signed dev prod vendor vendor-v5
           if ! run 241 2026-11-09T20:43:00Z; then
             echo "FAIL: the first run did not create the branch:"; cat "$work/log"; failed=1
           fi
@@ -1097,7 +1135,8 @@ jobs:
           if [ -z "$first" ] || [ -n "$(git --git-dir="$work/origin.git" rev-parse -q --verify "$first^" || true)" ]; then
             echo "FAIL: the first run did not make a root commit"; failed=1
           fi
-          for name in dev prod vendor; do
+          # vendor-v5/ has its own index, and vendor/'s lists only vendor/'s.
+          for name in dev prod vendor vendor-v5; do
             for suffix in statement.json sigstore.json; do
               if ! cmp -s <(show "$name/241-20261109T204300Z.$suffix") "$out/signed/$name.$suffix"; then
                 echo "FAIL: $name/241-20261109T204300Z.$suffix is not the signed file"; failed=1
@@ -1105,8 +1144,8 @@ jobs:
             done
             lists "$name" 241-20261109T204300Z
           done
-          if [ "$(git --git-dir="$work/origin.git" ls-tree -r --name-only "refs/heads/$branch" | wc -l)" != 9 ]; then
-            echo "FAIL: the first commit holds other files than three statements, bundles and indexes"; failed=1
+          if [ "$(git --git-dir="$work/origin.git" ls-tree -r --name-only "refs/heads/$branch" | wc -l)" != 12 ]; then
+            echo "FAIL: the first commit holds other files than four statements, bundles and indexes"; failed=1
           fi
           if [ "$(git --git-dir="$work/origin.git" log -1 --format='%an <%ae>' "refs/heads/$branch")" != "$author <$email>" ]; then
             echo "FAIL: the commit is not by $author"; failed=1

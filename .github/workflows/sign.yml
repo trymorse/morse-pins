@@ -1,12 +1,13 @@
 name: sign
 
-# Signs one statement per environment listing its enclave images, one statement hashing the
-# vendor pins, and one statement per environment that holds a routes file, hashing it, with Sigstore
-# keyless signing logged to Rekor v2, and commits each statement and its bundle to the
-# statements/images branch. An enclave hands its task keys only to an image that such a statement
-# lists, and takes vendor pins, or a routes file newer than its own, only from such a statement. It
-# accepts only a statement that this file signed on main of this repository in the first attempt of
-# a push or schedule run, so a workflow_dispatch trigger or a re-run would sign nothing it accepts.
+# Signs one statement per environment listing its enclave images, two statements hashing the
+# vendor pins, one for each format, and one statement per environment that holds a routes file,
+# hashing it, with Sigstore keyless signing logged to Rekor v2, and commits each statement and its
+# bundle to the statements/images branch. An enclave hands its task keys only to an image that such
+# a statement lists, and takes vendor pins, or a routes file newer than its own, only from such a
+# statement. It accepts only a statement that this file signed on main of this repository in the
+# first attempt of a push or schedule run, so a workflow_dispatch trigger or a re-run would sign
+# nothing it accepts.
 # Everything signed is public at the commit the certificate names, and the signer needs no secret.
 # A run whose statements the newest on the branch already signs, less than a day before, commits
 # nothing, so the hourly runs keep the newest statement well inside the 7 days an enclave allows.
@@ -19,6 +20,7 @@ on:
       - 'phala_model_pins.json'
       - 'phala_pins.json'
       - 'tinfoil_pins.json'
+      - 'v5/**'
       - 'routes/**'
       - '.github/workflows/sign.yml'
       - '.github/workflows/sigstore-signing-config.json'
@@ -45,6 +47,9 @@ jobs:
       IDENTITY: https://github.com/trymorse/morse-pins/.github/workflows/sign.yml@refs/heads/main
       ISSUER: https://token.actions.githubusercontent.com
       VENDOR_FILES: near_pins.json phala_model_pins.json phala_pins.json tinfoil_pins.json
+      # Phala's v5 file in place of the root's, which installed apps and enclaves already running
+      # read as v4.
+      VENDOR_V5_FILES: near_pins.json phala_model_pins.json v5/phala_pins.json tinfoil_pins.json
       # Sigstore's signing_config_rekor_v2.v0.2.json with its Rekor v1 log removed, so every entry
       # goes to the Rekor v2 shard. It sits under .github/workflows/, which only a push with the
       # workflows permission can change, as for this file.
@@ -81,11 +86,14 @@ jobs:
             echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >>"$GITHUB_OUTPUT"
       # Writes each environment's statement: every image enclave_pins.json lists for it, sorted by
-      # pcr0, as RFC 8785 (JCS) bytes with no trailing newline. Then the vendor statement: the sha256
-      # of the JCS bytes of each vendor pins file, the hash morse-core's use-pins.sh records in
-      # pins_source.json. The vendor statement names each file by its path in the private pins
-      # repository, v4/<name>, the key every reader of the statement (pinsig.VendorFiles, morse-core's
-      # VENDOR_FILES) expects, and this repository holds that file at its root.
+      # pcr0, as RFC 8785 (JCS) bytes with no trailing newline. Then the two vendor statements,
+      # morse-vendor-pins-v1 over VENDOR_FILES and morse-vendor-pins-v5 over VENDOR_V5_FILES: the
+      # sha256 of the JCS bytes of each file, the hash morse-core's use-pins.sh records in
+      # pins_source.json. A vendor statement names each file by its path in the private pins
+      # repository, the key its readers expect: a file this repository holds at its root is
+      # v4/<name> there, and one under v5/ has the same path in both. The v5 statement has a name of
+      # its own, so a directory and an index of its own: installed apps refuse a whole index that
+      # lists two entries at one sequence.
       #
       # Each file signed must be the regular file at the signed commit, so anyone can read what was
       # signed there. And a revocation cannot be undone: the step refuses when the file lists,
@@ -123,7 +131,8 @@ jobs:
           [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "bad commit: $COMMIT" >&2; exit 1; }
           [[ $TIME =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "bad time: $TIME" >&2; exit 1; }
           read -ra files <<<"$VENDOR_FILES"
-          for file in enclave_pins.json "${files[@]}"; do
+          read -ra v5_files <<<"$VENDOR_V5_FILES"
+          for file in enclave_pins.json "${files[@]}" "${v5_files[@]}"; do
             [ -f "$file" ] && [ ! -L "$file" ] || { echo "$file is not a regular file" >&2; exit 1; }
             [ "$(git ls-tree --format='%(objectmode) %(objectname)' "$COMMIT" -- "$file")" = "100644 $(git hash-object -- "$file")" ] ||
               { echo "$file is not the regular file at $COMMIT" >&2; exit 1; }
@@ -158,7 +167,7 @@ jobs:
                  pins_commit: $commit, time: $time, images: .}' enclave_pins.json >"$RUNNER_TEMP/signed/$environment.statement.json"
           done
           : >"$RUNNER_TEMP/hashes"
-          for file in "${files[@]}"; do
+          for file in $(printf '%s\n' "${files[@]}" "${v5_files[@]}" | sort -u); do
             python3 -I -c '
           import json, re, sys
           path = sys.argv[1]
@@ -205,11 +214,18 @@ jobs:
           ' "$file"
             jq -jcS . "$file" >"$RUNNER_TEMP/jcs"
             hash=$(sha256sum "$RUNNER_TEMP/jcs" | cut -c1-64)
-            printf 'v4/%s\t%s\n' "$file" "$hash" >>"$RUNNER_TEMP/hashes"
+            printf '%s\t%s\n' "$file" "$hash" >>"$RUNNER_TEMP/hashes"
           done
-          jq -jcSRn --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
-            [inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries
-            | {type: "morse-vendor-pins-v1", sequence: $sequence, pins_commit: $commit, time: $time, files: .}' "$RUNNER_TEMP/hashes" >"$RUNNER_TEMP/signed/vendor.statement.json"
+          for name in vendor vendor-v5; do
+            case $name in
+              vendor) type=morse-vendor-pins-v1 list=${files[*]} ;;
+              vendor-v5) type=morse-vendor-pins-v5 list=${v5_files[*]} ;;
+            esac
+            jq -jcSRn --arg type "$type" --arg list "$list" --argjson sequence "$SEQUENCE" --arg commit "$COMMIT" --arg time "$TIME" '
+              ([inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries) as $hashes
+              | {type: $type, sequence: $sequence, pins_commit: $commit, time: $time,
+                 files: ($list | split(" ") | map({key: (if startswith("v5/") then . else "v4/\(.)" end), value: $hashes[.]}) | from_entries)}' "$RUNNER_TEMP/hashes" >"$RUNNER_TEMP/signed/$name.statement.json"
+          done
           routes_max=4194304
           [ ! -L routes ] || { echo "routes is a symlink" >&2; exit 1; }
           while IFS= read -r path; do
@@ -644,7 +660,7 @@ jobs:
           names=()
           for statement in "$RUNNER_TEMP"/signed/*.statement.json; do
             name=$(basename "$statement" .statement.json)
-            [[ $name =~ ^(dev|prod|vendor|routes-dev|routes-prod)$ ]] || { echo "::error::unknown statement $name" >&2; exit 1; }
+            [[ $name =~ ^(dev|prod|vendor|vendor-v5|routes-dev|routes-prod)$ ]] || { echo "::error::unknown statement $name" >&2; exit 1; }
             names+=("$name")
             for suffix in statement.json sigstore.json; do
               path=$name/$SEQUENCE-$stamp.$suffix
