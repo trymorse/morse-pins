@@ -249,6 +249,12 @@
     },
     {
       "image": "offline.invalid/ccimage/serving",
+      "digest": "sha256:2c0e6772f11518a49cfb0143f8a6422a2d70cdd9d662130ad2349dec957ae781",
+      "source": null,
+      "first_seen": "2026-11-27"
+    },
+    {
+      "image": "offline.invalid/ccimage/serving",
       "digest": "sha256:da041889fb6f201ab37e740786a19a813dc82b80c13f3ab29dd58735a0ab9cd9",
       "source": null,
       "first_seen": "2026-11-25"
