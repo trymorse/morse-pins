@@ -1,0 +1,8 @@
+[
+  {
+    "sequence": 722,
+    "time": "2026-11-27T06:38:06Z",
+    "statement": "vendor-v5/722-20261127T063806Z.statement.json",
+    "bundle": "vendor-v5/722-20261127T063806Z.sigstore.json"
+  }
+]
