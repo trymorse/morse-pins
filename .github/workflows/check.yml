@@ -166,7 +166,7 @@ jobs:
           # Makes a directory whose repo/ commits the enclave pins of $2 filtered by $1 and the vendor
           # files of $3, and prints it. The step writes its statements to its signed/.
           pins_dir() {
-            local dir file
+            local dir
             dir=$(mktemp -d)
             mkdir "$dir/repo"
             jq "$1" "$2" >"$dir/repo/enclave_pins.json"
@@ -201,8 +201,8 @@ jobs:
               "$(hex a)" "$(hex b)" "$(hex f)" "$(hex c)" "$(hex d)" "$(hex e)" "$commit" "$sequence" "$time" >"$dir/prod.want"
             printf '{"files":{"v4/near_pins.json":"e33d060b9109ff309755b7c6fd244147f9dca651e79aab33607a797423397dc3","v4/phala_model_pins.json":"b82ceaa08f0721d27f1c8c4b4ca6570b0396e16f3c1f6b2f23bd309408891df0","v4/phala_pins.json":"ce08f3e4859f0adcc28e2dc92f26f55f19865ea317f9272a40bd0f422fc9fb5c","v4/tinfoil_pins.json":"6cfdbf49b2d582eb5fb1f6ddda3f6e1099f2cd45bfd7cf54917d7608ca7036cb"},"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-vendor-pins-v1"}' \
               "$commit" "$sequence" "$time" >"$dir/vendor.want"
-            # The v5 pins plan: the same sequence, commit and time, with Phala's v5 file in place of
-            # the root's under its own path.
+            # The same sequence, commit and time, with Phala's v5 file in place of the root's under its
+            # own path.
             printf '{"files":{"v4/near_pins.json":"e33d060b9109ff309755b7c6fd244147f9dca651e79aab33607a797423397dc3","v4/phala_model_pins.json":"b82ceaa08f0721d27f1c8c4b4ca6570b0396e16f3c1f6b2f23bd309408891df0","v4/tinfoil_pins.json":"6cfdbf49b2d582eb5fb1f6ddda3f6e1099f2cd45bfd7cf54917d7608ca7036cb","v5/phala_pins.json":"8d0d3430354c8af020784abe60d8e06de3f701d799e576957e3a7e86a1d52ebb"},"pins_commit":"%s","sequence":%s,"time":"%s","type":"morse-vendor-pins-v5"}' \
               "$commit" "$sequence" "$time" >"$dir/vendor-v5.want"
             if [ "$(cd "$dir/signed" && echo *)" != "$assets" ]; then
@@ -433,7 +433,7 @@ jobs:
           # of the signed commit. Each argument is one commit's pins, the fixture through a jq filter,
           # oldest first.
           history() {
-            local dir change file
+            local dir change
             dir=$(mktemp -d)
             mkdir "$dir/repo"
             (cd "$vendors" && cp --parents $every_vendor_file "$dir/repo/")
@@ -681,7 +681,7 @@ jobs:
           put prod "$same" hour | index prod
           publish
           signs "the branch has no vendor index"
-          # The v5 pins plan: what the branch holds before the first run that signs v5.
+          # What the branch holds before the first run that signs v5.
           put dev "$same" hour | index dev
           put prod "$same" hour | index prod
           put vendor "$same" hour | index vendor
@@ -1135,7 +1135,7 @@ jobs:
           if [ -z "$first" ] || [ -n "$(git --git-dir="$work/origin.git" rev-parse -q --verify "$first^" || true)" ]; then
             echo "FAIL: the first run did not make a root commit"; failed=1
           fi
-          # The v5 pins plan: vendor-v5/ has its own index, and vendor/'s lists only vendor/'s.
+          # vendor-v5/ has its own index, and vendor/'s lists only vendor/'s.
           for name in dev prod vendor vendor-v5; do
             for suffix in statement.json sigstore.json; do
               if ! cmp -s <(show "$name/241-20261109T204300Z.$suffix") "$out/signed/$name.$suffix"; then
